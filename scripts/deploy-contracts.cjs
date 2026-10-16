@@ -67,6 +67,14 @@ const CONTRACTS = [
   { name: 'subscription', wasmFile: 'subscription.wasm' },
 ];
 
+// Canonical env var prefix for the deployed contract IDs (the names the backend
+// reads), e.g. `vault-registry` -> `STELLAR_CONTRACT_VAULT_REGISTRY`.
+const CONTRACT_ENV_PREFIX = 'STELLAR_CONTRACT_';
+
+function contractEnvName(contractName) {
+  return `${CONTRACT_ENV_PREFIX}${contractName.toUpperCase().replace(/-/g, '_')}`;
+}
+
 // Minimum account balance (in stroops) required to proceed with deployment.
 const MIN_BALANCE_STROOPS = 10_000_000n; // 1 XLM
 
@@ -490,7 +498,7 @@ function writeContractIds(contractIds, network, dryRun) {
   ];
 
   for (const [name, id] of Object.entries(contractIds)) {
-    const envName = `${name.toUpperCase().replace(/-/g, '_')}_CONTRACT_ID`;
+    const envName = contractEnvName(name);
     lines.push(`${envName}=${id}`);
   }
 
@@ -592,4 +600,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, validateEnv, CONTRACTS };
+module.exports = { parseArgs, validateEnv, CONTRACTS, contractEnvName };

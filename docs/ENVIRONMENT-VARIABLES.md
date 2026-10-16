@@ -39,9 +39,9 @@ This document is the single source of truth for every environment variable used 
 | `PAY_TO` | Yes | — | Backend |
 | `AGENT_SECRET_KEY` | Yes | — | Backend |
 | `REGISTRY_SECRET_KEY` | Yes | — | Backend |
-| `VAULT_REGISTRY_CONTRACT_ID` | Yes | — | Backend |
-| `REGISTRY_CONTRACT_ID` | Yes | — | Backend |
 | `STELLAR_CONTRACT_VAULT_REGISTRY` | Yes | — | Backend |
+| `VAULT_REGISTRY_CONTRACT_ID` | No | — | Backend (deprecated alias) |
+| `REGISTRY_CONTRACT_ID` | No | — | Backend (deprecated alias) |
 | `STELLAR_CONTRACT_ACCESS_LEASE` | Yes | — | Backend |
 | `STELLAR_CONTRACT_SUBSCRIPTION` | Yes | — | Backend |
 | `STELLAR_SECRET_KEY` | Yes | — | Backend / Scripts |
@@ -140,21 +140,11 @@ This document is the single source of truth for every environment variable used 
 - **Default:** none
 - **Format:** `G...` (56-character Stellar public key)
 
-### `VAULT_REGISTRY_CONTRACT_ID`
-- **Purpose:** Contract ID of the vault registry contract.
-- **Required:** Yes
-- **Default:** none
-
-### `REGISTRY_CONTRACT_ID`
-- **Purpose:** Contract ID of the primary registry contract.
-- **Required:** Yes
-- **Default:** none
-
 ### `STELLAR_CONTRACT_VAULT_REGISTRY`
 - **Purpose:** Contract ID for the vault registry (used by deployment scripts and backend).
 - **Required:** Yes
 - **Default:** none
-- **Notes:** May be identical to `VAULT_REGISTRY_CONTRACT_ID`; keep both for backward compatibility with existing scripts.
+- **Notes:** Canonical name; written to `contract-ids.env` by both deploy paths. The legacy aliases below are normalised to this key by `rollback-contracts.cjs`.
 
 ### `STELLAR_CONTRACT_ACCESS_LEASE`
 - **Purpose:** Contract ID for the access-lease contract.
@@ -165,6 +155,18 @@ This document is the single source of truth for every environment variable used 
 - **Purpose:** Contract ID for the subscription contract.
 - **Required:** Yes
 - **Default:** none
+
+### `VAULT_REGISTRY_CONTRACT_ID` *(deprecated alias)*
+- **Purpose:** Legacy alias of `STELLAR_CONTRACT_VAULT_REGISTRY`.
+- **Required:** No
+- **Default:** none
+- **Notes:** Retained only for backward compatibility with older scripts; new deployments should use `STELLAR_CONTRACT_VAULT_REGISTRY`.
+
+### `REGISTRY_CONTRACT_ID` *(deprecated alias)*
+- **Purpose:** Legacy alias of `STELLAR_CONTRACT_VAULT_REGISTRY`.
+- **Required:** No
+- **Default:** none
+- **Notes:** Retained only for backward compatibility with older scripts; new deployments should use `STELLAR_CONTRACT_VAULT_REGISTRY`.
 
 ---
 
@@ -348,8 +350,6 @@ These variables are consumed by the deployment manifests rather than by the appl
 | `PAY_TO` | Dev `G...` account | Staging `G...` account | Prod `G...` account |
 | `AGENT_SECRET_KEY` | Dev `S...` key | Staging `S...` key | Prod `S...` key (secret manager) |
 | `REGISTRY_SECRET_KEY` | Dev `S...` key | Staging `S...` key | Prod `S...` key (secret manager) |
-| `VAULT_REGISTRY_CONTRACT_ID` | Dev contract ID | Staging contract ID | Prod contract ID |
-| `REGISTRY_CONTRACT_ID` | Dev contract ID | Staging contract ID | Prod contract ID |
 | `STELLAR_CONTRACT_VAULT_REGISTRY` | Dev contract ID | Staging contract ID | Prod contract ID |
 | `STELLAR_CONTRACT_ACCESS_LEASE` | Dev contract ID | Staging contract ID | Prod contract ID |
 | `STELLAR_CONTRACT_SUBSCRIPTION` | Dev contract ID | Staging contract ID | Prod contract ID |
@@ -401,8 +401,6 @@ USDC_CONTRACT_ID=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 # Contracts
 # ---------------------------------------------------------------------------
 PAY_TO=GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-VAULT_REGISTRY_CONTRACT_ID=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-REGISTRY_CONTRACT_ID=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 STELLAR_CONTRACT_VAULT_REGISTRY=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 STELLAR_CONTRACT_ACCESS_LEASE=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 STELLAR_CONTRACT_SUBSCRIPTION=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX

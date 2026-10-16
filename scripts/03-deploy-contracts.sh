@@ -13,7 +13,8 @@
 #   export CONTRACTS_DIR=../contracts   # optional; defaults to ../contracts
 #   bash scripts/03-deploy-contracts.sh
 #
-# Output: contract-ids.env  (source this before running 04-init-contracts.sh)
+# Output: contract-ids.env  (canonical STELLAR_CONTRACT_* keys; source this
+#         before running 04-init-contracts.sh)
 
 set -euo pipefail
 
@@ -60,9 +61,10 @@ WASM_DIR="$CONTRACTS_DIR/target/wasm32-unknown-unknown/release"
 
 # ── Helper: deploy one contract ───────────────────────────────────────────────
 deploy_contract() {
-  local name="$1"
+  local env_name="$1"
+  local name="$2"
   local wasm="$WASM_DIR/${name}.wasm"
-  # Progress goes to stderr; only `name=id` goes to stdout (and the env file).
+  # Progress goes to stderr; only `ENV_NAME=id` goes to stdout (and the env file).
   echo "" >&2
   echo "▸ Deploying $name…" >&2
   local id
@@ -71,14 +73,14 @@ deploy_contract() {
     --source   deployer \
     --network  testnet)
   echo "  Contract ID: $id" >&2
-  echo "$name=$id"
+  echo "$env_name=$id"
 }
 
 # ── Deploy ────────────────────────────────────────────────────────────────────
 {
-  deploy_contract "vault_registry"
-  deploy_contract "access_lease"
-  deploy_contract "subscription"
+  deploy_contract "STELLAR_CONTRACT_VAULT_REGISTRY" "vault_registry"
+  deploy_contract "STELLAR_CONTRACT_ACCESS_LEASE"   "access_lease"
+  deploy_contract "STELLAR_CONTRACT_SUBSCRIPTION"   "subscription"
 } > "$OUT_FILE"
 
 echo ""

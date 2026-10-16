@@ -192,12 +192,12 @@ Then redeploy the backend (Railway redeploys automatically on env change).
 ```bash
 # Read vault-registry count
 soroban contract invoke \
-  --id $vault_registry --source deployer --network testnet \
+  --id $STELLAR_CONTRACT_VAULT_REGISTRY --source deployer --network testnet \
   -- count
 
 # Grant a test lease (30 days = 518400 ledgers)
 soroban contract invoke \
-  --id $access_lease --source deployer --network testnet \
+  --id $STELLAR_CONTRACT_ACCESS_LEASE --source deployer --network testnet \
   -- grant_lease \
   --resource_id "test-resource-1" \
   --buyer GBUYER1_PUBLIC_KEY \
@@ -205,7 +205,7 @@ soroban contract invoke \
 
 # Check if valid
 soroban contract invoke \
-  --id $access_lease --source deployer --network testnet \
+  --id $STELLAR_CONTRACT_ACCESS_LEASE --source deployer --network testnet \
   -- is_valid \
   --resource_id "test-resource-1" \
   --buyer GBUYER1_PUBLIC_KEY

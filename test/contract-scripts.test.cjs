@@ -46,6 +46,38 @@ test('isValidContractId accepts C-addresses only', () => {
   assert.equal(rollback.isValidContractId(undefined), false);
 });
 
+test('canonicalContractKey normalises every deploy-path spelling', () => {
+  assert.equal(
+    rollback.canonicalContractKey('STELLAR_CONTRACT_VAULT_REGISTRY', 'x'),
+    'STELLAR_CONTRACT_VAULT_REGISTRY'
+  );
+  assert.equal(
+    rollback.canonicalContractKey('VAULT_REGISTRY_CONTRACT_ID', 'x'),
+    'STELLAR_CONTRACT_VAULT_REGISTRY'
+  );
+  assert.equal(
+    rollback.canonicalContractKey('ACCESS_LEASE_CONTRACT', 'x'),
+    'STELLAR_CONTRACT_ACCESS_LEASE'
+  );
+  assert.equal(
+    rollback.canonicalContractKey('REGISTRY_CONTRACT_ID', 'x'),
+    'STELLAR_CONTRACT_VAULT_REGISTRY'
+  );
+  assert.equal(
+    rollback.canonicalContractKey('vault_registry', VALID_ID),
+    'STELLAR_CONTRACT_VAULT_REGISTRY'
+  );
+  // Bare names are only contract references when the value is a contract ID.
+  assert.equal(rollback.canonicalContractKey('network', 'testnet'), null);
+  assert.equal(rollback.canonicalContractKey('NETWORK', 'testnet'), null);
+});
+
+test('deploy contractEnvName uses the canonical STELLAR_CONTRACT_* scheme', () => {
+  assert.equal(deploy.contractEnvName('vault-registry'), 'STELLAR_CONTRACT_VAULT_REGISTRY');
+  assert.equal(deploy.contractEnvName('access-lease'), 'STELLAR_CONTRACT_ACCESS_LEASE');
+  assert.equal(deploy.contractEnvName('subscription'), 'STELLAR_CONTRACT_SUBSCRIPTION');
+});
+
 test('rollback parseArgs requires --backup and resolves default RPC per network', () => {
   assert.throws(() => rollback.parseArgs([]), /--backup/);
 
@@ -67,7 +99,7 @@ test('rollback parseArgs requires --backup and resolves default RPC per network'
   );
 });
 
-test('updateEnvFile replaces existing keys, appends new ones, keeps other lines', () => {
+test('updateEnvFile updates aliases, appends canonical keys, keeps other lines', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rollback-test-'));
   const file = path.join(dir, '.env');
   fs.writeFileSync(file, '# keep me\nOTHER=x\nVAULT_REGISTRY_CONTRACT_ID=old\n');
@@ -77,16 +109,18 @@ test('updateEnvFile replaces existing keys, appends new ones, keeps other lines'
   try {
     rollback.updateEnvFile(
       file,
-      { VAULT_REGISTRY_CONTRACT_ID: VALID_ID, ACCESS_LEASE_CONTRACT_ID: VALID_ID },
+      { STELLAR_CONTRACT_VAULT_REGISTRY: VALID_ID, STELLAR_CONTRACT_ACCESS_LEASE: VALID_ID },
       false
     );
   } finally {
     process.stdout.write = silence;
   }
 
+  // The legacy alias is kept in sync and the canonical key is appended.
   assert.equal(
     fs.readFileSync(file, 'utf8'),
-    `# keep me\nOTHER=x\nVAULT_REGISTRY_CONTRACT_ID=${VALID_ID}\nACCESS_LEASE_CONTRACT_ID=${VALID_ID}\n`
+    `# keep me\nOTHER=x\nVAULT_REGISTRY_CONTRACT_ID=${VALID_ID}\n` +
+      `STELLAR_CONTRACT_VAULT_REGISTRY=${VALID_ID}\nSTELLAR_CONTRACT_ACCESS_LEASE=${VALID_ID}\n`
   );
   fs.rmSync(dir, { recursive: true, force: true });
 });

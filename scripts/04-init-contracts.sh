@@ -2,7 +2,8 @@
 # SynapsVault — Step 4: Initialise all deployed contracts
 #
 # Prerequisites:
-#   source contract-ids.env      (sets vault_registry, access_lease, subscription)
+#   source contract-ids.env      (sets STELLAR_CONTRACT_VAULT_REGISTRY,
+#                                 STELLAR_CONTRACT_ACCESS_LEASE, STELLAR_CONTRACT_SUBSCRIPTION)
 #   export DEPLOYER_SECRET=S...
 #   export BACKEND_PUBLIC=G...   (the backend platform wallet public key)
 #
@@ -10,9 +11,9 @@
 
 set -euo pipefail
 
-: "${vault_registry:?  source contract-ids.env first}"
-: "${access_lease:?    source contract-ids.env first}"
-: "${subscription:?    source contract-ids.env first}"
+: "${STELLAR_CONTRACT_VAULT_REGISTRY:?  source contract-ids.env first}"
+: "${STELLAR_CONTRACT_ACCESS_LEASE:?    source contract-ids.env first}"
+: "${STELLAR_CONTRACT_SUBSCRIPTION:?    source contract-ids.env first}"
 : "${DEPLOYER_SECRET:? export DEPLOYER_SECRET}"
 : "${BACKEND_PUBLIC:?  export BACKEND_PUBLIC}"
 
@@ -31,7 +32,7 @@ printf '%s\n' "$DEPLOYER_SECRET" | $CLI keys add deployer --secret-key 2>/dev/nu
 echo ""
 echo "▸ Initialising vault-registry (admin = BACKEND_PUBLIC)…"
 $CLI contract invoke \
-  --id      "$vault_registry" \
+  --id      "$STELLAR_CONTRACT_VAULT_REGISTRY" \
   --source  deployer \
   --network testnet \
   -- init \
@@ -42,7 +43,7 @@ echo "✅ vault-registry initialised"
 echo ""
 echo "▸ Initialising access-lease (admin = BACKEND_PUBLIC)…"
 $CLI contract invoke \
-  --id      "$access_lease" \
+  --id      "$STELLAR_CONTRACT_ACCESS_LEASE" \
   --source  deployer \
   --network testnet \
   -- init \
@@ -53,7 +54,7 @@ echo "✅ access-lease initialised"
 echo ""
 echo "▸ Initialising subscription manager (admin = BACKEND_PUBLIC)…"
 $CLI contract invoke \
-  --id      "$subscription" \
+  --id      "$STELLAR_CONTRACT_SUBSCRIPTION" \
   --source  deployer \
   --network testnet \
   -- init \
@@ -64,7 +65,7 @@ echo "✅ subscription initialised"
 echo ""
 echo "▸ Verifying vault-registry…"
 COUNT=$($CLI contract invoke \
-  --id      "$vault_registry" \
+  --id      "$STELLAR_CONTRACT_VAULT_REGISTRY" \
   --source  deployer \
   --network testnet \
   -- count 2>/dev/null || echo "0")
@@ -78,9 +79,9 @@ echo "╚═══════════════════════�
 echo ""
 echo "Copy these into your backend .env:"
 echo ""
-echo "  STELLAR_CONTRACT_VAULT_REGISTRY=$vault_registry"
-echo "  STELLAR_CONTRACT_ACCESS_LEASE=$access_lease"
-echo "  STELLAR_CONTRACT_SUBSCRIPTION=$subscription"
+echo "  STELLAR_CONTRACT_VAULT_REGISTRY=$STELLAR_CONTRACT_VAULT_REGISTRY"
+echo "  STELLAR_CONTRACT_ACCESS_LEASE=$STELLAR_CONTRACT_ACCESS_LEASE"
+echo "  STELLAR_CONTRACT_SUBSCRIPTION=$STELLAR_CONTRACT_SUBSCRIPTION"
 echo "  STELLAR_NETWORK=testnet"
 echo "  STELLAR_HORIZON_URL=https://horizon-testnet.stellar.org"
 echo ""
