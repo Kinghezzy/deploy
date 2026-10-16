@@ -22,6 +22,12 @@
  *   2. Verifies each old contract still exists on-chain (via Soroban RPC).
  *   3. Updates the backend environment / ConfigMap to the previous contract IDs.
  *
+ * Contract-ID keys are normalised to the canonical `STELLAR_CONTRACT_*` names
+ * the backend reads, so backups written by either deploy path are supported:
+ *   STELLAR_CONTRACT_VAULT_REGISTRY   (canonical; both deploy paths)
+ *   VAULT_REGISTRY_CONTRACT_ID        (legacy SDK deployer)
+ *   vault_registry                    (legacy bash deployer)
+ *
  * Usage:
  *   node scripts/rollback-contracts.cjs \
  *     --backup ./backups/contract-ids.env.2024-01-01T00-00-00Z \
@@ -188,6 +194,53 @@ function isValidContractId(id) {
   return typeof id === 'string' && CONTRACT_ID_RE.test(id);
 }
 
+// Canonical env var prefix for deployed contract IDs (the names the backend
+// reads), e.g. `vault_registry` -> `STELLAR_CONTRACT_VAULT_REGISTRY`.
+const CONTRACT_ENV_PREFIX = 'STELLAR_CONTRACT_';
+
+// Legacy keys whose canonical target is not a plain prefix/suffix rewrite:
+// `REGISTRY_CONTRACT_ID` is the older name for the vault registry contract
+// (see docs/ENVIRONMENT-VARIABLES.md).
+const CONTRACT_KEY_ALIASES = {
+  REGISTRY_CONTRACT_ID: `${CONTRACT_ENV_PREFIX}VAULT_REGISTRY`,
+  REGISTRY_CONTRACT: `${CONTRACT_ENV_PREFIX}VAULT_REGISTRY`,
+};
+
+/**
+ * Map any recognised contract-ID key to its canonical `STELLAR_CONTRACT_*`
+ * name, so backups written by any deploy path can be rolled back.
+ *
+ * Returns null when `key` is not a contract-ID reference.
+ */
+function canonicalContractKey(key, value) {
+  if (typeof key !== 'string') return null;
+
+  if (key.startsWith(CONTRACT_ENV_PREFIX)) {
+    const stem = key.slice(CONTRACT_ENV_PREFIX.length);
+    return stem ? key : null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(CONTRACT_KEY_ALIASES, key)) {
+    return CONTRACT_KEY_ALIASES[key];
+  }
+
+  for (const suffix of ['_CONTRACT_ID', '_CONTRACT']) {
+    if (key.endsWith(suffix)) {
+      const stem = key.slice(0, -suffix.length);
+      return stem ? `${CONTRACT_ENV_PREFIX}${stem}` : null;
+    }
+  }
+
+  // Bare lower-case contract name as written by 03-deploy-contracts.sh
+  // (e.g. `vault_registry=C...`). Only treat it as a contract reference when
+  // the value is a well-formed contract ID, so ordinary settings are ignored.
+  if (/^[a-z][a-z0-9_]*$/.test(key) && isValidContractId(value)) {
+    return `${CONTRACT_ENV_PREFIX}${key.toUpperCase()}`;
+  }
+
+  return null;
+}
+
 /**
  * Verify a contract exists on-chain by reading its instance ledger entry
  * (persistent `LedgerKeyContractInstance`) from Soroban RPC.
@@ -237,9 +290,17 @@ function updateEnvFile(envFilePath, contractIds, dryRun) {
     const eq = trimmed.indexOf('=');
     if (eq === -1) return line;
     const key = trimmed.slice(0, eq).trim();
-    if (Object.prototype.hasOwnProperty.call(contractIds, key)) {
-      seen.add(key);
-      return `${key}=${contractIds[key]}`;
+    const value = trimmed.slice(eq + 1).trim();
+    const canonicalKey = canonicalContractKey(key, value);
+    if (
+      canonicalKey &&
+      Object.prototype.hasOwnProperty.call(contractIds, canonicalKey)
+    ) {
+      // Update canonical keys in place. Legacy aliases (e.g.
+      // VAULT_REGISTRY_CONTRACT_ID) are kept in sync as well, while the
+      // canonical key is still appended below unless already present verbatim.
+      if (key === canonicalKey) seen.add(canonicalKey);
+      return `${key}=${contractIds[canonicalKey]}`;
     }
     return line;
   });
@@ -320,23 +381,26 @@ async function main() {
     process.exit(1);
   }
 
-  // Only consider keys that look like contract IDs.
+  // Only consider keys that reference a contract ID, normalising each to its
+  // canonical STELLAR_CONTRACT_* name so either deploy path can be rolled back.
   const contractIds = {};
   for (const [key, value] of Object.entries(previous)) {
-    if (key.endsWith('_CONTRACT_ID') || key.endsWith('_CONTRACT')) {
-      if (!isValidContractId(value)) {
-        process.stderr.write(
-          `[error] Backup key ${key} has invalid contract ID: ${value}\n`
-        );
-        process.exit(1);
-      }
-      contractIds[key] = value;
+    const canonicalKey = canonicalContractKey(key, value);
+    if (!canonicalKey) continue;
+    if (!isValidContractId(value)) {
+      process.stderr.write(
+        `[error] Backup key ${key} has invalid contract ID: ${value}\n`
+      );
+      process.exit(1);
     }
+    contractIds[canonicalKey] = value;
   }
 
   if (Object.keys(contractIds).length === 0) {
     process.stderr.write(
-      '[error] No *_CONTRACT_ID entries found in backup file.\n'
+      '[error] No contract ID entries found in backup file.\n' +
+        '        Expected STELLAR_CONTRACT_* keys, *_CONTRACT_ID keys or bare\n' +
+        '        contract names (vault_registry, access_lease, subscription).\n'
     );
     process.exit(1);
   }
@@ -412,6 +476,7 @@ module.exports = {
   readEnvFile,
   parseArgs,
   isValidContractId,
+  canonicalContractKey,
   contractExistsOnChain,
   updateEnvFile,
   updateConfigMap,
