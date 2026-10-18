@@ -52,10 +52,12 @@ const CONTRACT_IDS_FILE = path.join(ROOT_DIR, 'contract-ids.env');
 const NETWORK_PASSPHRASES = {
   testnet: Networks.TESTNET,
   mainnet: Networks.PUBLIC,
+  futurenet: Networks.FUTURENET,
 };
 
 const DEFAULT_RPC_URLS = {
   testnet: 'https://soroban-testnet.stellar.org',
+  futurenet: 'https://rpc-futurenet.stellar.org',
 };
 
 const DEFAULT_WASM_DIR = path.join(ROOT_DIR, 'target', 'wasm32-unknown-unknown', 'release');
@@ -116,7 +118,7 @@ function parseArgs(argv) {
   }
 
   if (args.network && !NETWORK_PASSPHRASES[args.network]) {
-    throw new Error(`Invalid --network value: ${args.network} (expected testnet|mainnet)`);
+    throw new Error(`Invalid --network value: ${args.network} (expected testnet|mainnet|futurenet or set SOROBAN_RPC_URL for local)`);
   }
 
   return args;
@@ -126,12 +128,13 @@ function printUsage() {
   console.log(`Usage: node scripts/deploy-contracts.cjs [options]
 
 Options:
-  --network <testnet|mainnet>  Target network (defaults to $NETWORK).
-  --wasm-dir <dir>             Directory containing the built contract *.wasm files
-                               (defaults to $CONTRACTS_WASM_DIR, then ./target/wasm32-unknown-unknown/release).
-  --yes, -y                    Skip the interactive mainnet confirmation (for CI).
-  --dry-run                    Perform all checks without submitting transactions.
-  --help, -h                   Show this help message.
+  --network <testnet|mainnet|futurenet>  Target network (defaults to $NETWORK).
+                                         For local Stellar/Quickstart node, set SOROBAN_RPC_URL.
+  --wasm-dir <dir>                       Directory containing the built contract *.wasm files
+                                         (defaults to $CONTRACTS_WASM_DIR, then ./target/wasm32-unknown-unknown/release).
+  --yes, -y                              Skip the interactive mainnet confirmation (for CI).
+  --dry-run                              Perform all checks without submitting transactions.
+  --help, -h                             Show this help message.
 `);
 }
 
@@ -163,7 +166,9 @@ function validateEnv(args) {
   if (!network) {
     missing.push('NETWORK (or pass --network)');
   } else if (!NETWORK_PASSPHRASES[network]) {
-    throw new Error(`Invalid NETWORK value: ${network} (expected testnet|mainnet)`);
+    if (!process.env.SOROBAN_RPC_URL) {
+      throw new Error(`Invalid NETWORK value: ${network} (expected testnet|mainnet|futurenet or set SOROBAN_RPC_URL for local)`);
+    }
   }
 
   const rpcUrl = process.env.SOROBAN_RPC_URL || DEFAULT_RPC_URLS[network];
@@ -463,7 +468,7 @@ async function initContract({ server, keypair, networkPassphrase, contractId, ad
 // On-chain verification
 // ---------------------------------------------------------------------------
 
-async function verifyContract({ server, contractId, dryRun, contractName }) {
+async function verifyContract({ server, contractId, dryRun, contractName, expectedAdmin }) {
   log.step(`Verifying contract "${contractName}"`);
 
   if (dryRun) {
@@ -482,6 +487,32 @@ async function verifyContract({ server, contractId, dryRun, contractName }) {
   }
 
   log.ok(`Verified "${contractName}" exists on-chain at ${contractId}`);
+
+  if (expectedAdmin) {
+    try {
+      const contractData = ledgerEntries.val;
+      const storageData = contractData.contractData();
+      if (storageData && storageData.val() && storageData.val().sym()) {
+        const dataMap = storageData.val().map();
+        if (dataMap) {
+          for (const entry of dataMap) {
+            const key = entry.key();
+            if (key.sym() && key.sym().toString() === 'admin') {
+              const adminVal = entry.val();
+              const admin = scValToNative(adminVal);
+              if (admin !== expectedAdmin) {
+                throw new Error(`Contract "${contractName}" admin mismatch: expected ${expectedAdmin}, got ${admin}`);
+              }
+              log.ok(`Verified "${contractName}" admin is ${expectedAdmin}`);
+              return;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      log.warn(`Could not verify admin for "${contractName}": ${e.message}`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -512,6 +543,32 @@ function writeContractIds(contractIds, network, dryRun) {
 
   fs.writeFileSync(CONTRACT_IDS_FILE, content, { encoding: 'utf8' });
   log.ok(`Wrote contract IDs to ${CONTRACT_IDS_FILE}`);
+}
+
+function writeDeploymentRecord(contractIds, network, adminAddress, deployer, txHashes, dryRun) {
+  log.step('Writing deployment record');
+
+  const deploymentJson = {
+    timestamp: new Date().toISOString(),
+    network,
+    deployer,
+    adminAddress,
+    contracts: contractIds,
+    transactionHashes: txHashes,
+    gitRef: process.env.GIT_REF || null,
+  };
+
+  const recordFile = path.join(ROOT_DIR, `deployment-record-${network}-${Date.now()}.json`);
+  const content = JSON.stringify(deploymentJson, null, 2) + '\n';
+
+  if (dryRun) {
+    log.info('[dry-run] Would write the following deployment record:');
+    console.log(content);
+    return;
+  }
+
+  fs.writeFileSync(recordFile, content, { encoding: 'utf8' });
+  log.ok(`Wrote deployment record to ${recordFile}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -577,12 +634,21 @@ async function main() {
       contractId,
       dryRun: args.dryRun,
       contractName: contract.name,
+      expectedAdmin: adminAddress,
     });
 
     contractIds[contract.name] = contractId;
   }
 
   writeContractIds(contractIds, network, args.dryRun);
+  writeDeploymentRecord(
+    contractIds,
+    network,
+    adminAddress,
+    keypair.publicKey(),
+    {},
+    args.dryRun
+  );
 
   log.step('Deployment complete');
   for (const [name, id] of Object.entries(contractIds)) {

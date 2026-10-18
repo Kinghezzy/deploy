@@ -349,13 +349,23 @@ function updateConfigMap(name, namespace, contractIds, dryRun) {
   try {
     execFileSync('kubectl', args, { encoding: 'utf8', stdio: ['ignore', 'inherit', 'inherit'] });
     process.stdout.write(
-      `[ok] Updated ConfigMap: ${namespace}/${name}\n` +
-        '     Pods only read envFrom at start-up; run `kubectl rollout restart deployment/backend`\n' +
-        '     to pick up the new contract IDs.\n'
+      `[ok] Updated ConfigMap: ${namespace}/${name}\n`
+    );
+
+    process.stdout.write(
+      `[info] Restarting backend deployment to pick up new contract IDs...\n`
+    );
+    execFileSync(
+      'kubectl',
+      ['rollout', 'restart', 'deployment/backend', '-n', namespace],
+      { encoding: 'utf8', stdio: ['ignore', 'inherit', 'inherit'] }
+    );
+    process.stdout.write(
+      `[ok] Backend deployment rollout restart initiated in namespace: ${namespace}\n`
     );
   } catch (err) {
     throw new Error(
-      `Failed to update ConfigMap ${namespace}/${name}: ${err.message}`
+      `Failed to update ConfigMap ${namespace}/${name} or restart backend: ${err.message}`
     );
   }
 }
