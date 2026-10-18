@@ -173,6 +173,10 @@ node scripts/02-fund-accounts.js \
 
 Verify at: https://stellar.expert/explorer/testnet/account/G[DEPLOYER]
 
+Every key is validated before Friendbot is contacted, an account that is
+already funded counts as success, and the step exits non-zero if any account
+could not be funded — so it can be chained with `&&`.
+
 ### Step 3–4 — Deploy + init contracts
 
 ```bash
