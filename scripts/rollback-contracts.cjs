@@ -57,8 +57,12 @@ function parseEnvFile(contents) {
   const result = {};
   const lines = contents.split(/\r?\n/);
   for (const rawLine of lines) {
-    const line = rawLine.trim();
+    let line = rawLine.trim();
     if (!line || line.startsWith('#')) continue;
+    // Strip leading 'export ' prefix (handles bash-style export KEY=value)
+    if (line.startsWith('export ')) {
+      line = line.slice(7).trim();
+    }
     const eq = line.indexOf('=');
     if (eq === -1) continue;
     const key = line.slice(0, eq).trim();
