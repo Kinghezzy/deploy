@@ -100,7 +100,7 @@ services:
       - app_network
 
   postgres-exporter:
-    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
     container_name: app_postgres_exporter
     restart: unless-stopped
     profiles:
@@ -136,7 +136,7 @@ services:
       - app_network
 
   alertmanager:
-    image: prom/alertmanager:v0.27.0
+    image: prom/alertmanager:v0.34.1
     container_name: app_alertmanager
     restart: unless-stopped
     profiles:
