@@ -44,6 +44,29 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Copy built assets from the build stage
 COPY --from=build /app/dist /usr/share/nginx/html
 
+# Runtime configuration. VITE_* values are baked in at build time, so staging
+# and production would otherwise need separate images. Instead we generate
+# /config.js at container start from env vars; the frontend reads
+# window.__APP_CONFIG__ (see SynapsVault/frontend). Defaults mirror the
+# build-time values above so an unconfigured container still works.
+ENV APP_API_URL=/api \
+    APP_NETWORK=testnet \
+    APP_SENTRY_DSN=""
+
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'cat > /usr/share/nginx/html/config.js <<EOF' \
+    'window.__APP_CONFIG__ = {' \
+    '  apiUrl: "${APP_API_URL}",' \
+    '  network: "${APP_NETWORK}",' \
+    '  sentryDsn: "${APP_SENTRY_DSN}"' \
+    '};' \
+    'EOF' \
+    'exec "$@"' \
+    > /docker-entrypoint.d/40-generate-config.sh \
+    && chmod +x /docker-entrypoint.d/40-generate-config.sh
+
 EXPOSE 80
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

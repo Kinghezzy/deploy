@@ -104,15 +104,16 @@ jobs:
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend-migrate
 
+      # The frontend image is environment-agnostic: VITE_* values are no longer
+      # baked in at build time. Runtime configuration is injected via env vars
+      # (see frontend/Dockerfile entrypoint, which renders /config.js from
+      # window.__APP_CONFIG__) and supplied by the k8s manifests at deploy time.
       - name: Build and push frontend image
         uses: docker/build-push-action@v7
         with:
           context: ./src/frontend
           file: ./frontend/Dockerfile
           push: true
-          build-args: |
-            VITE_API_URL=/api
-            VITE_NETWORK=${{ vars.STELLAR_NETWORK || 'testnet' }}
           tags: |
             ${{ steps.meta.outputs.prefix }}/frontend:${{ steps.meta.outputs.tag }}
             ${{ steps.meta.outputs.prefix }}/frontend:latest
@@ -170,10 +171,26 @@ jobs:
             "frontend=${PREFIX}/frontend:${TAG}"
           kubectl kustomize . | grep -E '^\s+image:'
 
+      # Runtime configuration for the frontend image. These env vars are read
+      # by the container entrypoint at start to render /config.js, so the same
+      # image can be promoted across environments without a rebuild.
+      - name: Configure frontend runtime env
+        if: steps.config.outputs.ready == 'true'
+        working-directory: ./k8s
+        env:
+          FRONTEND_API_URL: ${{ vars.FRONTEND_API_URL || '/api' }}
+          FRONTEND_NETWORK: ${{ vars.STELLAR_NETWORK || 'testnet' }}
+        run: |
+          kubectl -n synapsvault create configmap frontend-runtime-config \
+            --from-literal=API_URL="$FRONTEND_API_URL" \
+            --from-literal=NETWORK="$FRONTEND_NETWORK" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Apply manifests
         if: steps.config.outputs.ready == 'true'
         run: |
           kubectl apply -k k8s/
+          kubectl -n synapsvault rollout restart deployment/frontend
           kubectl -n synapsvault rollout status deployment/backend --timeout=300s
           kubectl -n synapsvault rollout status deployment/frontend --timeout=180s
 
