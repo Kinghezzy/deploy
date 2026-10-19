@@ -56,12 +56,12 @@ jobs:
         run: npm ci
 
       - name: Install Rust + wasm32 target
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1e68e9ce9a578ad21be5c273b9c981e2a9816f88 # stable
         with:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: contracts
 

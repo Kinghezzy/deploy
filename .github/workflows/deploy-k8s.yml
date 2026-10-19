@@ -144,7 +144,7 @@ jobs:
 
       - name: Set up kubectl
         if: steps.config.outputs.ready == 'true'
-        uses: azure/setup-kubectl@v5
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v5
         with:
           version: v1.31.0
 
