@@ -174,11 +174,11 @@ kubectl edit hpa <name> -n synapsvault
 
 ## 7. Probes
 
-The deployment configures liveness and readiness probes so Kubernetes can detect unhealthy pods and route traffic only to healthy ones:
+The deployments configure separate startup, liveness, and readiness probes so Kubernetes can distinguish between slow container startup, process deadlocks, and temporary downstream dependency outages:
 
-- **`livenessProbe`** — restarts the container if the check fails repeatedly. Points at a lightweight health endpoint (e.g. `/healthz`).
-- **`readinessProbe`** — removes the pod from Service endpoints until the check passes, so traffic is only sent to pods that can serve requests (e.g. `/readyz`).
-- **`startupProbe`** (if configured) — gives slow-starting containers time to boot before liveness checks begin.
+- **`startupProbe`** — gates liveness and readiness checks until the container finishes booting (`/health/live`, up to `failureThreshold: 12` × `periodSeconds: 5` = 60 seconds).
+- **`livenessProbe`** — restarts the container only if the process itself is unresponsive (`/health/live`), avoiding cascading restarts when Postgres or Soroban RPC is transiently degraded.
+- **`readinessProbe`** — removes the pod from Service endpoints until downstream dependencies are ready to serve traffic (`/health/ready`).
 
 Each probe sets:
 
@@ -194,7 +194,49 @@ Inspect probe behavior:
 kubectl describe pod <pod> -n synapsvault
 ```
 
-Look at the `Liveness`/`Readiness` sections and the `Events` at the bottom for probe failures.
+Look at the `Startup`/`Liveness`/`Readiness` sections and the `Events` at the bottom for probe failures.
+
+## 8. Emergency Key Rotation (Contract Admin & Backend Signing Key)
+
+If the backend signing key (`BACKEND_SECRET_KEY` / `STELLAR_SECRET_KEY`) or the contract admin key is suspected of compromise, execute the following rotation procedure immediately:
+
+1. **Generate and fund a replacement keypair** on a clean workstation:
+   ```sh
+   node scripts/01-generate-keypairs.js
+   ```
+   Fund the new public key (`GNEW_ADMIN...`) on the target network.
+
+2. **Rotate on-chain contract authority**:
+   - If the deployed contract exposes an admin transfer entrypoint (`set_admin` / `rotate_admin`), invoke it signed by the current admin (or recovery multisig) to assign `GNEW_ADMIN...`:
+     ```sh
+     stellar contract invoke \
+       --id "$STELLAR_CONTRACT_ACCESS_LEASE" \
+       --source current-admin \
+       --network testnet \
+       -- set_admin --new_admin GNEW_ADMIN...
+     ```
+   - If the compromised key was the sole `init(admin)` authority on an immutable contract without an in-place transfer entrypoint, deploy fresh contract instances initialized with `ADMIN_PUBLIC_KEY=GNEW_ADMIN...`:
+     ```sh
+     STELLAR_SECRET_KEY=SNEW_DEPLOYER... \
+     ADMIN_PUBLIC_KEY=GNEW_ADMIN... \
+     npm run deploy:contracts -- --network testnet
+     ```
+
+3. **Update `backend-secret` and `backend-config` in Kubernetes**:
+   ```sh
+   kubectl create secret generic backend-secret \
+     --namespace synapsvault \
+     --from-env-file=./secrets.env \
+     --dry-run=client -o yaml | kubectl apply -f -
+   ```
+   If new contract IDs were deployed, update `k8s/configmap.yaml` (or run `npm run rollback:contracts` against the new `contract-ids.env`) and apply.
+
+4. **Roll out the backend and revoke the old key**:
+   ```sh
+   kubectl rollout restart deployment/backend -n synapsvault
+   kubectl rollout status deployment/backend -n synapsvault
+   ```
+   Decommission the compromised Stellar account (or set its master weight to `0` via a `set_options` operation) so it can no longer sign transactions.
 
 ## Troubleshooting
 
