@@ -20,6 +20,7 @@ All configuration referenced here lives in the [`monitoring/`](../monitoring) di
   - [Email](#email)
   - [Slack](#slack)
 - [6. Verify the setup](#6-verify-the-setup)
+- [Required metrics](#required-metrics)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -218,6 +219,7 @@ receivers:
         from: alertmanager@example.com
         smarthost: smtp.example.com:587
         auth_username: alertmanager@example.com
+        auth_password_file: /etc/alertmanager/smtp_password
         auth_password: <smtp-password>
         require_tls: true
 ```
@@ -228,6 +230,49 @@ receivers:
 receivers:
   - name: slack
     slack_configs:
+      - api_url_file: /etc/alertmanager/slack_webhook_url
+        channel: "#alerts"
+        send_resolved: true
+```
+
+Route alerts to the receivers in the `route` block, then reload Alertmanager:
+
+```bash
+curl -X POST http://localhost:9093/-/reload
+```
+
+## 6. Verify the setup
+
+1. Confirm Prometheus is scraping the backend: **Prometheus → Status → Targets** should show the `backend` job as `UP`.
+2. Confirm the required metrics are present (see [Required metrics](#required-metrics)).
+3. Trigger a test alert (e.g. stop the backend) and confirm it reaches your notification channel.
+
+## Required metrics
+
+The alert rules in [`monitoring/alert-rules.yml`](../monitoring/alert-rules.yml) depend on the backend exporting the following metric families. If any of these are missing from the `/metrics` output, the corresponding alerts will silently never fire.
+
+| Metric family | Used for |
+| --- | --- |
+| `db_connection_pool_*` | Database connection pool saturation and exhaustion alerts |
+| `stellar_rpc_*` | Stellar RPC latency, error rate, and availability alerts |
+| `soroban_rpc_*` | Soroban RPC latency, error rate, and availability alerts |
+
+Verify each family is exported before relying on the alerts:
+
+```bash
+curl -s http://localhost:3000/metrics \
+  | grep -E '^(db_connection_pool_|stellar_rpc_|soroban_rpc_)' \
+  | awk -F'{' '{print $1}' | awk '{print $1}' | sort -u
+```
+
+If a family is absent, the backend is missing instrumentation for it. Open an issue in the backend repository (`SynapsVault/backend`) to add the missing metrics. The alert rules include `absent()` checks that fire when a required metric family is not exported, so missing instrumentation surfaces as an alert rather than failing silently.
+
+## Troubleshooting
+
+- **Targets show `DOWN`**: check the scrape target host/port and that the backend is reachable from Prometheus.
+- **No metrics in Grafana**: confirm the data source URL and that the dashboard uses the correct data source.
+- **Alerts never fire**: verify the required metrics are exported (see [Required metrics](#required-metrics)) and that the rule file is loaded.
+- **Reload fails**: ensure Prometheus was started with `--web.enable-lifecycle`.
       - api_url: https://hooks.slack.com/services/<workspace>/<channel>/<token>
         channel: '#alerts'
         send_resolved: true
