@@ -214,6 +214,44 @@ soroban contract invoke \
 
 ---
 
+## Rotating a Compromised Contract Admin or Backend Signing Key
+
+If the contract `admin` key or the backend signing key (`BACKEND_SECRET` / `STELLAR_SECRET_KEY`) is compromised:
+
+1. **Generate a fresh keypair**:
+   ```bash
+   node scripts/01-generate-keypairs.js
+   ```
+   Fund the new account before proceeding (`node scripts/02-fund-accounts.js GNEW...` on testnet, or transfer XLM on mainnet).
+
+2. **Rotate on-chain contract admin**:
+   - **Contracts supporting admin transfer**: invoke `set_admin` on `access-lease` and `subscription` using the current admin signer to transfer authority to `GNEW_BACKEND_PUBLIC`:
+     ```bash
+     stellar contract invoke \
+       --id "$STELLAR_CONTRACT_ACCESS_LEASE" \
+       --source current_admin --network testnet \
+       -- set_admin --new_admin GNEW_BACKEND_PUBLIC
+
+     stellar contract invoke \
+       --id "$STELLAR_CONTRACT_SUBSCRIPTION" \
+       --source current_admin --network testnet \
+       -- set_admin --new_admin GNEW_BACKEND_PUBLIC
+     ```
+   - **Immutable contracts or lost admin key**: redeploy the contracts initialized with the new admin key using `deploy-contracts.cjs`:
+     ```bash
+     rm -f contract-ids.env
+     STELLAR_SECRET_KEY=SNEW_DEPLOYER_SECRET \
+     ADMIN_PUBLIC_KEY=GNEW_BACKEND_PUBLIC \
+     npm run deploy:contracts -- --network testnet
+     ```
+
+3. **Update backend secrets and contract IDs**:
+   - Replace `STELLAR_SECRET_KEY` / `BACKEND_SECRET_KEY` in your secret store (`backend-secret` in Kubernetes or Railway environment variables).
+   - If new contract instances were deployed, propagate the new `contract-ids.env` values to the backend environment and restart the service.
+   - Verify with `node scripts/06-smoke-test.js`.
+
+---
+
 ## Troubleshooting
 
 | Error | Fix |
