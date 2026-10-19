@@ -10,6 +10,11 @@
 #   git clone https://github.com/SynapsVault/frontend ../frontend
 #   cp .env.example .env
 #   docker compose up --build
+#
+# The monitoring stack (postgres-exporter, prometheus, alertmanager, grafana)
+# is optional and gated behind the `monitoring` profile. Start it with:
+#
+#   docker compose --profile monitoring up --build
 
 services:
   postgres:
@@ -94,6 +99,8 @@ services:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
     container_name: app_postgres_exporter
     restart: unless-stopped
+    profiles:
+      - monitoring
     environment:
       DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-app}?sslmode=disable
     depends_on:
@@ -106,6 +113,8 @@ services:
     image: prom/prometheus:v2.53.2
     container_name: app_prometheus
     restart: unless-stopped
+    profiles:
+      - monitoring
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
@@ -126,6 +135,8 @@ services:
     image: prom/alertmanager:v0.27.0
     container_name: app_alertmanager
     restart: unless-stopped
+    profiles:
+      - monitoring
     volumes:
       - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager_data:/alertmanager
@@ -141,6 +152,8 @@ services:
     image: grafana/grafana:11.2.0
     container_name: app_grafana
     restart: unless-stopped
+    profiles:
+      - monitoring
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
