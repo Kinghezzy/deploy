@@ -472,7 +472,8 @@ encrypt_archive() {
     age)
       info "Encrypting archive with age"
       local recipient="${BACKUP_ENCRYPTION_KEY}"
-      # If the key looks like a path to a file, use it as a recipient file.
+      # check_dependencies already verified that BACKUP_ENCRYPTION_KEY is either
+      # an existing recipients file or an age1... recipient public key.
       if [[ -f "${BACKUP_ENCRYPTION_KEY}" ]]; then
         age --encrypt --recipients-file "${BACKUP_ENCRYPTION_KEY}" \
           --output "${output}" "${input}"
@@ -480,9 +481,7 @@ encrypt_archive() {
         age --encrypt --recipient "${recipient}" \
           --output "${output}" "${input}"
       else
-        # Fall back to passphrase-based age encryption.
-        printf '%s' "${BACKUP_ENCRYPTION_KEY}" \
-          | age --encrypt --passphrase --output "${output}" "${input}"
+        die 2 "age requires an age1... recipient or a recipients file; use gpg for passphrases"
       fi
       ;;
     gpg)
@@ -588,6 +587,17 @@ upload_artifact() {
 # Manifest
 # ---------------------------------------------------------------------------
 
+# Escape arbitrary strings for safe inclusion inside JSON string literals.
+json_escape() {
+  local s="${1:-}"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "${s}"
+}
+
 write_manifest() {
   local encrypted_file="$1"
   local checksum="$2"
@@ -600,39 +610,41 @@ write_manifest() {
   hostname="$(hostname 2>/dev/null || echo unknown)"
   local git_commit="${GIT_COMMIT:-}"
   local environment="${ENVIRONMENT:-${APP_ENV:-unknown}}"
+  local enc_basename
+  enc_basename="$(basename "${encrypted_file}")"
 
   cat > "${MANIFEST_PATH}" <<EOF
 {
-  "name": "${BACKUP_NAME}",
-  "timestamp": "${BACKUP_DATE_ISO}",
+  "name": "$(json_escape "${BACKUP_NAME}")",
+  "timestamp": "$(json_escape "${BACKUP_DATE_ISO}")",
   "timestampEpoch": $(date -u +%s),
   "checksum": {
     "algorithm": "sha256",
-    "value": "${checksum}"
+    "value": "$(json_escape "${checksum}")"
   },
   "sizeBytes": ${size_bytes},
   "encryption": {
-    "method": "${BACKUP_ENCRYPTION_METHOD}",
+    "method": "$(json_escape "${BACKUP_ENCRYPTION_METHOD}")",
     "enabled": $([[ "${BACKUP_ENCRYPTION_METHOD}" == "none" ]] && echo false || echo true)
   },
   "storage": {
-    "provider": "${BACKUP_STORAGE_PROVIDER}",
-    "bucket": "${BACKUP_STORAGE_BUCKET}",
-    "key": "${object_key}"
+    "provider": "$(json_escape "${BACKUP_STORAGE_PROVIDER}")",
+    "bucket": "$(json_escape "${BACKUP_STORAGE_BUCKET}")",
+    "key": "$(json_escape "${object_key}")"
   },
   "source": {
-    "hostname": "${hostname}",
-    "environment": "${environment}",
-    "gitCommit": "${git_commit}",
+    "hostname": "$(json_escape "${hostname}")",
+    "environment": "$(json_escape "${environment}")",
+    "gitCommit": "$(json_escape "${git_commit}")",
     "databaseIncluded": ${db_included},
     "contractsIncluded": ${contracts_included},
-    "sorobanRpcUrl": "${SOROBAN_RPC_URL}",
-    "sorobanNetworkPassphrase": "${SOROBAN_NETWORK_PASSPHRASE}"
+    "sorobanRpcUrl": "$(json_escape "${SOROBAN_RPC_URL}")",
+    "sorobanNetworkPassphrase": "$(json_escape "${SOROBAN_NETWORK_PASSPHRASE}")"
   },
   "artifacts": {
-    "archive": "${BACKUP_NAME}.tar.gz",
-    "encrypted": "$(basename "${encrypted_file}")",
-    "manifest": "${BACKUP_NAME}.manifest.json"
+    "archive": "$(json_escape "${BACKUP_NAME}.tar.gz")",
+    "encrypted": "$(json_escape "${enc_basename}")",
+    "manifest": "$(json_escape "${BACKUP_NAME}.manifest.json")"
   }
 }
 EOF
