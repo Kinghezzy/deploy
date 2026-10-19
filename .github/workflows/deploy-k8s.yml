@@ -190,10 +190,75 @@ jobs:
           sarif_file: 'trivy-${{ matrix.image }}.sarif'
           category: 'trivy-${{ matrix.image }}'
 
-  deploy:
-    name: Deploy to Cluster
+  deploy-staging:
+    name: Deploy to Staging
     runs-on: ubuntu-latest
     needs: [build-and-push, scan]
+    environment:
+      name: staging
+      url: ${{ vars.DEPLOY_URL }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Check cluster credentials
+        id: config
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG }}
+        run: |
+          if [[ -z "$KUBECONFIG_B64" ]]; then
+            echo "::warning::Deploy skipped: the KUBECONFIG secret is not configured for the staging environment. Images were still built and pushed."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up kubectl
+        if: steps.config.outputs.ready == 'true'
+        uses: azure/setup-kubectl@v5
+        with:
+          version: v1.31.0
+
+      - name: Configure kubeconfig
+        if: steps.config.outputs.ready == 'true'
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          printf '%s' "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Pin image tags
+        if: steps.config.outputs.ready == 'true'
+        working-directory: ./k8s/overlays/staging
+        env:
+          PREFIX: ${{ needs.build-and-push.outputs.image-prefix }}
+          TAG: ${{ needs.build-and-push.outputs.image-tag }}
+        run: |
+          kustomize edit set image \
+            "backend=${PREFIX}/backend:${TAG}" \
+            "backend-migrate=${PREFIX}/backend-migrate:${TAG}" \
+            "frontend=${PREFIX}/frontend:${TAG}"
+          kubectl kustomize . | grep -E '^\s+image:'
+
+      - name: Apply manifests
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          kubectl apply -k k8s/overlays/staging
+          kubectl -n synapsvault-staging rollout status deployment/backend --timeout=300s
+          kubectl -n synapsvault-staging rollout status deployment/frontend --timeout=180s
+
+      - name: Smoke test
+        id: smoke
+        if: steps.config.outputs.ready == 'true'
+        env:
+          BASE_URL: ${{ vars.DEPLOY_URL }}
+        run: node scripts/06-smoke-test.js
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-and-push, scan, deploy-staging]
     environment:
       name: production
       url: ${{ vars.DEPLOY_URL }}
@@ -230,7 +295,7 @@ jobs:
 
       - name: Pin image tags
         if: steps.config.outputs.ready == 'true'
-        working-directory: ./k8s
+        working-directory: ./k8s/overlays/production
         env:
           PREFIX: ${{ needs.build-and-push.outputs.image-prefix }}
           TAG: ${{ needs.build-and-push.outputs.image-tag }}
@@ -244,7 +309,7 @@ jobs:
       - name: Apply manifests
         if: steps.config.outputs.ready == 'true'
         run: |
-          kubectl apply -k k8s/
+          kubectl apply -k k8s/overlays/production
           kubectl -n synapsvault rollout status deployment/backend --timeout=300s
           kubectl -n synapsvault rollout status deployment/frontend --timeout=180s
 
@@ -252,20 +317,5 @@ jobs:
         id: smoke
         if: steps.config.outputs.ready == 'true'
         env:
-          BASE_URL: ${{ vars.DEPLOY_URL }}/api
+          BASE_URL: ${{ vars.DEPLOY_URL }}
         run: node scripts/06-smoke-test.js
-
-      - name: Roll back on smoke test failure
-        if: failure() && steps.smoke.outcome == 'failure'
-        run: |
-          echo "::error::Smoke test failed; rolling back backend and frontend deployments."
-          kubectl -n synapsvault rollout undo deployment/backend
-          kubectl -n synapsvault rollout undo deployment/frontend
-          kubectl -n synapsvault rollout status deployment/backend --timeout=300s
-          kubectl -n synapsvault rollout status deployment/frontend --timeout=180s
-
-      - name: Verify deployment
-        if: steps.config.outputs.ready == 'true'
-        run: |
-          kubectl -n synapsvault get deployments -o wide
-          kubectl -n synapsvault get pods -o wide
