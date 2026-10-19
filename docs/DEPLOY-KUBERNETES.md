@@ -59,6 +59,39 @@ kubectl create secret generic backend-secret \
 > **Note:** After rotating secrets, restart the workloads so the new values are picked up:
 > `kubectl rollout restart deployment/backend -n synapsvault`.
 
+### Managing `backend-secret` with External Secrets Operator
+
+Instead of creating the secret by hand, you can let the [External Secrets Operator (ESO)](https://external-secrets.io/) sync it from your secret backend (AWS Secrets Manager, Vault, GCP Secret Manager, Azure Key Vault, ...).
+
+1. **Install ESO** into the cluster:
+
+   ```sh
+   helm repo add external-secrets https://charts.external-secrets.io
+   helm install external-secrets external-secrets/external-secrets \
+     --namespace external-secrets --create-namespace
+   ```
+
+2. **Create a `SecretStore`/`ClusterSecretStore`** that points at your secret backend and holds the credentials ESO uses to read it. See the [ESO provider docs](https://external-secrets.io/latest/provider/aws-secrets-manager/) for the exact spec of your provider.
+
+3. **Store the backend values** under a single remote secret (e.g. `synapsvault/backend`) with one property per key listed in `k8s/secrets.yaml` (`DATABASE_URL`, `JWT_SECRET`, `SESSION_SECRET`, ...).
+
+4. **Apply the example manifest**, adjusting `secretStoreRef` and the `remoteRef` keys to match your store:
+
+   ```sh
+   kubectl apply -f k8s/examples/external-secret.yaml
+   ```
+
+   [`k8s/examples/external-secret.yaml`](../k8s/examples/external-secret.yaml) creates an `ExternalSecret` that materializes the `backend-secret` Secret with the same keys the backend expects. It is intentionally **not** part of `k8s/kustomization.yaml`, so `kubectl apply -k k8s/` never touches it.
+
+5. **Verify the sync**:
+
+   ```sh
+   kubectl get externalsecret backend-secret -n synapsvault
+   kubectl get secret backend-secret -n synapsvault
+   ```
+
+   The `ExternalSecret` should report `SecretSynced` and the `backend-secret` Secret should exist. ESO refreshes it on the `refreshInterval` set in the manifest; restart the workloads after a rotation as noted above.
+
 ## 2. Apply the manifests
 
 Build and apply everything under `k8s/` with kustomize:
@@ -198,8 +231,7 @@ Look at the `Liveness`/`Readiness` sections and the `Events` at the bottom for p
 
 ## Troubleshooting
 
-- **Pods stuck in `Pending`** — check node capacity and scheduling events: `kubectl describe pod <pod> -n synapsvault`.
-- **Pods in `CrashLoopBackOff`** — check logs: `kubectl logs <pod> -n synapsvault --previous`.
-- **Ingress has no address** — confirm an ingress controller is installed and running.
-- **TLS certificate not issued** — check cert-manager: `kubectl describe certificate -n synapsvault` and `kubectl describe certificaterequest -n synapsvault`.
-- **HPA shows `<unknown>` targets** — metrics-server is missing or not ready.
+- **Pods stuck in `Pending`** — check node capacity and scheduling constraints (`kubectl describe pod <pod> -n synapsvault`).
+- **Pods in `CrashLoopBackOff`** — inspect logs (`kubectl logs <pod> -n synapsvault`) and confirm `backend-secret` exists with all required keys.
+- **`ImagePullBackOff`** — verify the image tags and that the cluster can pull from `ghcr.io`.
+- **Ingress returns 404/502** — confirm the ingress controller is running and the `Ingress` host matches your DNS.
