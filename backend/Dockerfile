@@ -12,6 +12,10 @@ ARG NODE_VERSION=22
 # x402-stellar wants @stellar/stellar-sdk@^12 while the app uses ^15), so npm
 # needs --legacy-peer-deps until that is fixed upstream. Override with
 # --build-arg NPM_FLAGS= once it is.
+#
+# TODO(#102): drop --legacy-peer-deps once the upstream peer conflict is
+# resolved. Tracked upstream at:
+#   https://github.com/SynapsVault/backend/issues (x402-stellar vs stellar-sdk)
 ARG NPM_FLAGS=--legacy-peer-deps
 
 # ---------- Stage 1: All dependencies (build + migrate tooling) ----------
