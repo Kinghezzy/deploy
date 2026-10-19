@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # SynapsVault — Step 4: Initialise all deployed contracts
 #
+# ⚠️  DEPRECATED: Use scripts/deploy-contracts.cjs instead.
+# This bash script is maintained for backwards compatibility but will be removed in a future release.
+# The Node.js script handles both deployment and initialization together.
+#
 # Prerequisites:
 #   source contract-ids.env      (sets STELLAR_CONTRACT_VAULT_REGISTRY,
 #                                 STELLAR_CONTRACT_ACCESS_LEASE, STELLAR_CONTRACT_SUBSCRIPTION)
