@@ -18,6 +18,7 @@ All configuration referenced here lives in the [`monitoring/`](../monitoring) di
   - [Email](#email)
   - [Slack](#slack)
 - [6. Verify the setup](#6-verify-the-setup)
+- [Required metrics](#required-metrics)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -186,91 +187,68 @@ Alert rules are defined in [`monitoring/alert-rules.yml`](../monitoring/alert-ru
 
 ## 5. Configure Alertmanager notification channels
 
-Alertmanager routing and receivers are configured in [`monitoring/alertmanager.yml`](../monitoring/alertmanager.yml). The examples below show how to add email and Slack receivers. Replace placeholders with your real values and **do not commit secrets** — use environment variable substitution or a secrets manager.
+Alertmanager routing and receivers are configured in [`monitoring/alertmanager.yml`](../monitoring/alertmanager.yml). The examples below show how to add email and Slack receivers. Replace placeholders with your own values and keep secrets out of version control.
 
 ### Email
 
-Add an email receiver and route alerts to it:
-
 ```yaml
-global:
-  smtp_smarthost: "smtp.example.com:587"
-  smtp_from: "alerts@example.com"
-  smtp_auth_username: "alerts@example.com"
-  smtp_auth_password: "<smtp-password>"   # use a secret, not a literal
-  smtp_require_tls: true
-
-route:
-  receiver: "email"
-  group_by: ["alertname"]
-  group_wait: 30s
-  group_interval: 5m
-  repeat_interval: 4h
-
 receivers:
-  - name: "email"
+  - name: email
     email_configs:
-      - to: "oncall@example.com"
-        send_resolved: true
+      - to: alerts@example.com
+        from: alertmanager@example.com
+        smarthost: smtp.example.com:587
+        auth_username: alertmanager@example.com
+        auth_password_file: /etc/alertmanager/smtp_password
+        require_tls: true
 ```
 
 ### Slack
 
-Add a Slack receiver using an incoming webhook URL:
-
 ```yaml
 receivers:
-  - name: "slack"
+  - name: slack
     slack_configs:
-      - api_url: "https://hooks.slack.com/services/<T...>/<B...>/<secret>"
+      - api_url_file: /etc/alertmanager/slack_webhook_url
         channel: "#alerts"
         send_resolved: true
-        title: "{{ .CommonLabels.alertname }}"
-        text: "{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}"
 ```
 
-To route different severities to different channels, use multiple routes:
-
-```yaml
-route:
-  receiver: "slack"
-  group_by: ["alertname"]
-  routes:
-    - matchers:
-        - severity = "critical"
-      receiver: "slack"
-      continue: false
-    - matchers:
-        - severity = "warning"
-      receiver: "email"
-```
-
-After editing, reload Alertmanager:
+Route alerts to the receivers in the `route` block, then reload Alertmanager:
 
 ```bash
 curl -X POST http://localhost:9093/-/reload
 ```
 
-or restart the container:
-
-```bash
-docker compose restart alertmanager
-```
-
 ## 6. Verify the setup
 
-1. **Metrics scraping** — In Prometheus, go to **Status → Targets** and confirm the `backend` target is `UP`.
-2. **Rules** — In Prometheus, go to **Status → Rules** and confirm the alert rules are loaded.
-3. **Alerts** — In Alertmanager (<http://localhost:9093>), confirm it is reachable and shows any firing alerts.
-4. **Notifications** — Trigger a test alert (or use Alertmanager's built-in test) and confirm it arrives in the configured email/Slack channel.
-5. **Dashboard** — Open the imported Grafana dashboard and confirm panels show live data.
+1. Confirm Prometheus is scraping the backend: **Prometheus → Status → Targets** should show the `backend` job as `UP`.
+2. Confirm the required metrics are present (see [Required metrics](#required-metrics)).
+3. Trigger a test alert (e.g. stop the backend) and confirm it reaches your notification channel.
+
+## Required metrics
+
+The alert rules in [`monitoring/alert-rules.yml`](../monitoring/alert-rules.yml) depend on the backend exporting the following metric families. If any of these are missing from the `/metrics` output, the corresponding alerts will silently never fire.
+
+| Metric family | Used for |
+| --- | --- |
+| `db_connection_pool_*` | Database connection pool saturation and exhaustion alerts |
+| `stellar_rpc_*` | Stellar RPC latency, error rate, and availability alerts |
+| `soroban_rpc_*` | Soroban RPC latency, error rate, and availability alerts |
+
+Verify each family is exported before relying on the alerts:
+
+```bash
+curl -s http://localhost:3000/metrics \
+  | grep -E '^(db_connection_pool_|stellar_rpc_|soroban_rpc_)' \
+  | awk -F'{' '{print $1}' | awk '{print $1}' | sort -u
+```
+
+If a family is absent, the backend is missing instrumentation for it. Open an issue in the backend repository (`SynapsVault/backend`) to add the missing metrics. The alert rules include `absent()` checks that fire when a required metric family is not exported, so missing instrumentation surfaces as an alert rather than failing silently.
 
 ## Troubleshooting
 
-- **Target is `DOWN`**: verify the metrics endpoint is reachable from the Prometheus container (`docker compose exec prometheus wget -qO- http://backend:3000/metrics`). Check host/port and network configuration.
-- **No data in Grafana**: confirm the data source URL is correct and that Prometheus has scraped data (**Prometheus → Graph**, query `up`).
-- **Rules not loading**: check the `rule_files` path and that the file is mounted into the container. Inspect Prometheus logs: `docker compose logs prometheus`.
-- **Alerts not delivered**: check Alertmanager logs (`docker compose logs alertmanager`) and confirm the receiver config, webhook URL, and SMTP credentials are correct.
-- **Config errors**: validate configs before reloading:
-  - Prometheus: `promtool check config monitoring/prometheus.yml`
-  - Alertmanager: `amtool check-config monitoring/alertmanager.yml`
+- **Targets show `DOWN`**: check the scrape target host/port and that the backend is reachable from Prometheus.
+- **No metrics in Grafana**: confirm the data source URL and that the dashboard uses the correct data source.
+- **Alerts never fire**: verify the required metrics are exported (see [Required metrics](#required-metrics)) and that the rule file is loaded.
+- **Reload fails**: ensure Prometheus was started with `--web.enable-lifecycle`.
