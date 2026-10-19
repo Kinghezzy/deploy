@@ -15,3 +15,12 @@ data:
   FACILITATOR_URL: "http://backend:3000"
   # Comma-separated browser origins allowed by CORS; set to your public host.
   ALLOWED_ORIGINS: "https://app.example.com"
+  # Contract IDs deployed to the network above. These are managed in Git so
+  # `kubectl apply` and the running config stay in sync. Replace the
+  # placeholders with the IDs emitted by the contract deploy, then re-apply:
+  #   kubectl apply -f k8s/configmap.yaml
+  #   kubectl rollout restart deployment/backend
+  # (or use `scripts/rollback-contracts.cjs --configmap` to patch them).
+  ESCROW_CONTRACT_ID: ""
+  PAYMENT_CONTRACT_ID: ""
+  REGISTRY_CONTRACT_ID: ""
