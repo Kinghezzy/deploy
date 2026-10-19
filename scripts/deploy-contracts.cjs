@@ -8,16 +8,22 @@
  * Soroban network, initializes each with the admin key, writes the resulting
  * contract IDs to contract-ids.env, and verifies each contract on-chain.
  *
+ * ⚠️  TESTNET IS THE HARD-CODED DEFAULT NETWORK.
+ * While this script can deploy to mainnet via the --network or NETWORK flag,
+ * testnet is the intended primary target. Mainnet deployments require explicit
+ * confirmation and are only available with the --yes flag in non-interactive mode.
+ *
  * Usage:
- *   node scripts/deploy-contracts.cjs [--network testnet|mainnet] [--wasm-dir <dir>] [--yes] [--dry-run]
+ *   node scripts/deploy-contracts.cjs [--network testnet|mainnet|futurenet] [--wasm-dir <dir>] [--yes] [--dry-run]
  *
  * Required environment variables:
  *   STELLAR_SECRET_KEY  - Secret key of the deploying account.
- *   NETWORK             - Target network (testnet|mainnet). Overridden by --network.
+ *   NETWORK             - Target network (testnet|mainnet|futurenet). Overridden by --network.
+ *                         Defaults to testnet if not specified.
  *
  * Optional environment variables:
  *   SOROBAN_RPC_URL     - Soroban RPC endpoint (defaults to the public testnet
- *                         RPC for testnet; required for mainnet).
+ *                         RPC for testnet; required for mainnet/futurenet).
  *   CONTRACTS_WASM_DIR  - Directory containing the built *.wasm files. Overridden
  *                         by --wasm-dir. Defaults to ./target/wasm32-unknown-unknown/release.
  *   ADMIN_PUBLIC_KEY    - Address passed to each contract's init(admin). Defaults
@@ -78,7 +84,8 @@ function contractEnvName(contractName) {
 }
 
 // Minimum account balance (in stroops) required to proceed with deployment.
-const MIN_BALANCE_STROOPS = 10_000_000n; // 1 XLM
+// 10 XLM accommodates uploading 3 WASM contracts (each ~300-500KB).
+const MIN_BALANCE_STROOPS = 100_000_000n; // 10 XLM
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -162,10 +169,10 @@ function validateEnv(args) {
     missing.push('STELLAR_SECRET_KEY');
   }
 
-  const network = args.network || process.env.NETWORK;
-  if (!network) {
-    missing.push('NETWORK (or pass --network)');
-  } else if (!NETWORK_PASSPHRASES[network]) {
+  // Default to testnet if network is not specified (testnet is hard-coded default).
+  const network = args.network || process.env.NETWORK || 'testnet';
+
+  if (!NETWORK_PASSPHRASES[network]) {
     if (!process.env.SOROBAN_RPC_URL) {
       throw new Error(`Invalid NETWORK value: ${network} (expected testnet|mainnet|futurenet or set SOROBAN_RPC_URL for local)`);
     }
@@ -516,6 +523,38 @@ async function verifyContract({ server, contractId, dryRun, contractName, expect
 }
 
 // ---------------------------------------------------------------------------
+// Resume logic
+// ---------------------------------------------------------------------------
+
+function loadExistingContractIds() {
+  if (!fs.existsSync(CONTRACT_IDS_FILE)) {
+    return {};
+  }
+
+  try {
+    const content = fs.readFileSync(CONTRACT_IDS_FILE, { encoding: 'utf8' });
+    const existing = {};
+    for (const line of content.split('\n')) {
+      if (line.startsWith('#') || !line.trim()) {
+        continue;
+      }
+      const [envName, contractId] = line.split('=');
+      if (envName && contractId) {
+        const contractName = envName
+          .replace(/^STELLAR_CONTRACT_/, '')
+          .toLowerCase()
+          .replace(/_/g, '-');
+        existing[contractName] = contractId;
+      }
+    }
+    return existing;
+  } catch (err) {
+    log.warn(`Could not load existing contract IDs: ${err.message}`);
+    return {};
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Output file
 // ---------------------------------------------------------------------------
 
@@ -598,9 +637,21 @@ async function main() {
   await preflightChecks({ server, keypair, network, contracts, dryRun: args.dryRun });
 
   log.info(`Admin address for init(): ${adminAddress}`);
-  const contractIds = {};
 
-  for (const contract of contracts) {
+  // Load existing contract IDs (for resume support)
+  const existingIds = loadExistingContractIds();
+  const contractIds = { ...existingIds };
+
+  const contractsToDeploy = contracts.filter((c) => !existingIds[c.name]);
+
+  if (contractsToDeploy.length < contracts.length) {
+    log.step(`Resuming: ${contractsToDeploy.length}/${contracts.length} contracts need deployment`);
+    for (const name of Object.keys(existingIds)) {
+      log.info(`Skipping ${name} (already deployed at ${existingIds[name]})`);
+    }
+  }
+
+  for (const contract of contractsToDeploy) {
     const wasmHash = await uploadWasm({
       server,
       keypair,

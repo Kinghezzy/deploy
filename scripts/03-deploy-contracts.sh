@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # SynapsVault — Step 3: Build + Deploy all 3 Soroban contracts to Stellar testnet
 #
+# ⚠️  DEPRECATED: Use scripts/deploy-contracts.cjs instead.
+# This bash script is maintained for backwards compatibility but will be removed in a future release.
+# See deploy-contracts.cjs for enhanced features (resume support, better error handling, mainnet safety).
+#
 # Prerequisites:
 #   - Rust + wasm32 target:  rustup target add wasm32-unknown-unknown
 #   - Stellar CLI:           https://developers.stellar.org/docs/tools/cli
