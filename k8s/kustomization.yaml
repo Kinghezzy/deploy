@@ -12,6 +12,7 @@ resources:
   - backend-deployment.yaml
   - backend-service.yaml
   - frontend-deployment.yaml
+  - pdb.yaml
   - ingress.yaml
 
 labels:

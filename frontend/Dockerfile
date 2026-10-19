@@ -4,7 +4,8 @@
 
 ARG NODE_VERSION=22
 # The frontend repo has no lockfile and conflicting peer dependencies, which
-# crash npm's resolver; --legacy-peer-deps works around it until fixed upstream.
+# crash npm's resolver; --legacy-peer-deps works around it until fixed upstream
+# (tracked in https://github.com/SynapsVault/frontend/issues).
 ARG NPM_FLAGS=--legacy-peer-deps
 
 # Stage 1: Build the Vite application

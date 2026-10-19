@@ -10,8 +10,9 @@
 ARG NODE_VERSION=22
 # The backend's dependency tree has unresolved peer conflicts (e.g.
 # x402-stellar wants @stellar/stellar-sdk@^12 while the app uses ^15), so npm
-# needs --legacy-peer-deps until that is fixed upstream. Override with
-# --build-arg NPM_FLAGS= once it is.
+# needs --legacy-peer-deps until that is fixed upstream
+# (tracked in https://github.com/SynapsVault/backend/issues). Override with
+# --build-arg NPM_FLAGS= once the upstream peer dependency issue is resolved.
 ARG NPM_FLAGS=--legacy-peer-deps
 
 # ---------- Stage 1: All dependencies (build + migrate tooling) ----------
