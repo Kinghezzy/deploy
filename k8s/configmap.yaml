@@ -11,6 +11,8 @@ data:
   STELLAR_NETWORK: "testnet"
   SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org"
   STELLAR_HORIZON_URL: "https://horizon-testnet.stellar.org"
+  # Contract IDs below are updated automatically by the deploy-contracts
+  # workflow (optional ConfigMap PR step) after a successful deploy.
   USDC_CONTRACT_ID: "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
   FACILITATOR_URL: "http://backend:3000"
   # Comma-separated browser origins allowed by CORS; set to your public host.
