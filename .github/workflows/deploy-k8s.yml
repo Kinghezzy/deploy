@@ -108,7 +108,9 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.prefix }}/backend-migrate:${{ steps.meta.outputs.tag }}
             ${{ steps.meta.outputs.prefix }}/backend-migrate:latest
-          cache-from: type=gha,scope=backend
+          cache-from: |
+            type=gha,scope=backend-migrate
+            type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend-migrate
 
       - name: Build and push frontend image
@@ -310,6 +312,9 @@ jobs:
         if: steps.config.outputs.ready == 'true'
         run: |
           kubectl apply -k k8s/overlays/production
+          kubectl -n synapsvault delete job backend-migrate --ignore-not-found
+          kubectl apply -k k8s/
+          kubectl -n synapsvault wait --for=condition=complete job/backend-migrate --timeout=180s
           kubectl -n synapsvault rollout status deployment/backend --timeout=300s
           kubectl -n synapsvault rollout status deployment/frontend --timeout=180s
 

@@ -3,9 +3,9 @@
 # that repository; this file lives in the deploy repo.
 
 ARG NODE_VERSION=22
-# The frontend repo has no lockfile and conflicting peer dependencies, which
-# crash npm's resolver; --legacy-peer-deps works around it until fixed upstream.
-ARG NPM_FLAGS=--legacy-peer-deps
+# Once the upstream lockfile and peer dependencies are resolved, drop the
+# --legacy-peer-deps flag (override with --build-arg NPM_FLAGS=--legacy-peer-deps if needed).
+ARG NPM_FLAGS=""
 
 # Stage 1: Build the Vite application
 FROM node:${NODE_VERSION}-alpine AS build
@@ -26,8 +26,8 @@ ENV VITE_API_URL=${VITE_API_URL} \
 
 # Install dependencies (leverage layer caching)
 COPY package.json package-lock.json* ./
-RUN if [ -f package-lock.json ]; then npm ci ${NPM_FLAGS}; \
-    else npm install --no-audit --no-fund ${NPM_FLAGS}; fi
+RUN if [ -f package-lock.json ]; then npm ci ${NPM_FLAGS} || npm ci --legacy-peer-deps; \
+    else npm install --no-audit --no-fund ${NPM_FLAGS} || npm install --no-audit --no-fund --legacy-peer-deps; fi
 
 # Copy source and build
 COPY . .
