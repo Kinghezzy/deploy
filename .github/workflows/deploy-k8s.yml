@@ -177,6 +177,22 @@ jobs:
           kubectl -n synapsvault rollout status deployment/backend --timeout=300s
           kubectl -n synapsvault rollout status deployment/frontend --timeout=180s
 
+      - name: Smoke test
+        id: smoke
+        if: steps.config.outputs.ready == 'true'
+        env:
+          BASE_URL: ${{ vars.DEPLOY_URL }}/api
+        run: node scripts/06-smoke-test.js
+
+      - name: Roll back on smoke test failure
+        if: failure() && steps.smoke.outcome == 'failure'
+        run: |
+          echo "::error::Smoke test failed; rolling back backend and frontend deployments."
+          kubectl -n synapsvault rollout undo deployment/backend
+          kubectl -n synapsvault rollout undo deployment/frontend
+          kubectl -n synapsvault rollout status deployment/backend --timeout=300s
+          kubectl -n synapsvault rollout status deployment/frontend --timeout=180s
+
       - name: Verify deployment
         if: steps.config.outputs.ready == 'true'
         run: |
