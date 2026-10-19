@@ -68,10 +68,26 @@ Each run writes two objects under `s3://<bucket>/backups/`:
 
 | Metric | Target | Notes |
 | --- | --- | --- |
-| **RPO** (Recovery Point Objective) | 24 hours | One full backup per day |
+| **RPO** (Recovery Point Objective) | 24 hours (logical) / 2 minutes (Supabase PITR) | Daily full `pg_dump` + continuous WAL archiving when PITR is enabled |
 | **RTO** (Recovery Time Objective) | 4 hours | Maximum acceptable downtime |
 
-For a tighter RPO, use your database provider's point-in-time recovery (e.g. Supabase PITR) alongside these logical backups.
+### 6.1 Supabase Point-in-Time Recovery (PITR) vs. Logical `pg_dump` Backups
+
+When hosting PostgreSQL on Supabase in production, enable **Supabase Point-in-Time Recovery (PITR)** alongside the daily encrypted `pg_dump` archives produced by `scripts/backup.sh`:
+
+| Capability | Daily `pg_dump` (`scripts/backup.sh`) | Supabase PITR (Physical + WAL) |
+| --- | --- | --- |
+| **Granularity (RPO)** | 24 hours (02:00 UTC snapshot) | Up to **2 minutes** (any second within retention window) |
+| **Storage Independence** | Independent S3 / R2 / MinIO bucket with client-side `gpg`/`age` encryption | Managed inside Supabase infrastructure (S3 + WALG) |
+| **Contract State Included** | Yes (`contracts/` Soroban RPC snapshots + `manifest.json`) | No (database only) |
+| **Staging Verification** | Automated weekly via `scripts/restore.sh --verify-only` | Manual clone/restore via Supabase Dashboard or Management API |
+
+#### When to use which:
+1. **Accidental table drop, bad migration, or data corruption within the last 7–28 days**:
+   - Use **Supabase PITR** (Dashboard → **Database** → **Backups** → **Point in Time** → select the exact UTC timestamp immediately before the incident) to minimize data loss to `< 2 minutes`.
+   - After PITR finishes, inspect the latest `soroban-backup-*.manifest.json` from object storage if you also need to cross-check on-chain contract IDs.
+2. **Provider outage, region migration, or compliance archive recovery**:
+   - Use `scripts/restore.sh` with the encrypted `pg_dump` archive stored in your external bucket (`BACKUP_STORAGE_BUCKET`) to restore into any standard PostgreSQL 15/17 instance.
 
 ## 7. Restore Procedure
 
