@@ -11,6 +11,10 @@
 #   cp .env.example .env
 #   docker compose up --build
 #
+# Postgres version: local dev runs Postgres 17 to match production (Supabase)
+# and the backup client version used in .github/workflows/backup.yml. Keep
+# these aligned so dumps taken from production restore cleanly into local dev.
+#
 # The monitoring stack (postgres-exporter, prometheus, alertmanager, grafana)
 # is optional and gated behind the `monitoring` profile. Start it with:
 #
@@ -18,7 +22,7 @@
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: postgres:17-alpine
     container_name: app_postgres
     restart: unless-stopped
     environment:

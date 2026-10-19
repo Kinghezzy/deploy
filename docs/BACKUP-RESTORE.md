@@ -2,6 +2,18 @@
 
 This runbook describes how backups are taken, where they are stored, how long they are retained, and how to restore the system in the event of data loss or corruption.
 
+## 0. PostgreSQL Version Alignment
+
+All environments run **PostgreSQL 17**:
+
+| Environment | Version | Where |
+| --- | --- | --- |
+| Local dev | 17 | `docker-compose.yml` (`postgres:17`) |
+| Production / Supabase | 17 | Supabase project (Postgres 17) |
+| Backup / restore client | 17 | `.github/workflows/backup.yml` (`postgres:17` image) |
+
+**Why:** `pg_dump` output from a newer major version cannot be restored into an older server. Keeping the backup client, local dev and production on the same major version (17) guarantees that dumps taken in CI restore cleanly into local dev and production, and vice versa. When upgrading Postgres, bump all three together.
+
 ## 1. Scope
 
 The following data is backed up:
@@ -149,14 +161,6 @@ If the restore fails, `restore.sh` rolls its transaction back and exits non-zero
 **Escalation timeline:**
 
 1. Acknowledge the incident within **15 minutes**.
-2. If unresolved after **30 minutes**, escalate to the secondary on-call.
-3. If unresolved after **1 hour**, escalate to the engineering manager.
-4. If a data breach is suspected, notify the security team **immediately**.
-
-## 10. References
-
-- Backup workflow: [`.github/workflows/backup.yml`](../.github/workflows/backup.yml)
-- Restore script: [`scripts/restore.sh`](../scripts/restore.sh)
-- Backup script: [`scripts/backup.sh`](../scripts/backup.sh)
-- Database migration rollback: [`docs/DATABASE-ROLLBACK.md`](./DATABASE-ROLLBACK.md)
-- Environment variables: [`docs/ENVIRONMENT-VARIABLES.md`](./ENVIRONMENT-VARIABLES.md)
+2. If unresolved after **30 minutes**, escalate to the secondary on-call engineer.
+3. If still unresolved after **1 hour**, escalate to the engineering manager.
+4. For suspected security incidents, notify the security team immediately.
