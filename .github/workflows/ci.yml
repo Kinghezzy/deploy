@@ -45,6 +45,23 @@ jobs:
           shellcheck scripts/*.sh
       - name: Check bash syntax
         run: for f in scripts/*.sh; do bash -n "$f"; done
+      - name: End-to-end backup.sh and restore.sh round-trip check
+        run: |
+          out_dir="$(mktemp -d)"
+          work_dir="$(mktemp -d)"
+          BACKUP_SKIP_DB=1 \
+          BACKUP_SKIP_CONTRACTS=1 \
+          BACKUP_SKIP_UPLOAD=1 \
+          BACKUP_CLEANUP_WORK_DIR=0 \
+          BACKUP_WORK_DIR="${work_dir}" \
+          BACKUP_ENCRYPTION_METHOD=gpg \
+          BACKUP_ENCRYPTION_KEY="ci-e2e-passphrase" \
+          BACKUP_OUTPUT_DIR="${out_dir}" \
+          bash scripts/backup.sh
+          test -f "${out_dir}/manifest.json"
+          python3 -m json.tool "${out_dir}/manifest.json" > /dev/null
+          bash scripts/restore.sh --help > /dev/null
+          rm -rf "${out_dir}" "${work_dir}"
 
   node:
     name: Node scripts and tests
