@@ -18,12 +18,15 @@
 #   -h, --help             Show this help
 #
 # Environment (same names as backup.sh; legacy names in parentheses):
+#   BACKUP_STORAGE_PROVIDER          s3 (default) or supabase
 #   BACKUP_STORAGE_BUCKET            Bucket name (BACKUP_BUCKET) - required
 #   BACKUP_STORAGE_ENDPOINT          S3-compatible endpoint URL (BACKUP_ENDPOINT)
 #   BACKUP_STORAGE_PREFIX            Key prefix, default "backups" (BACKUP_PREFIX)
 #   BACKUP_STORAGE_REGION            Region, default us-east-1 (AWS_DEFAULT_REGION)
 #   BACKUP_STORAGE_ACCESS_KEY_ID     Credentials (AWS_ACCESS_KEY_ID)
 #   BACKUP_STORAGE_SECRET_ACCESS_KEY Credentials (AWS_SECRET_ACCESS_KEY)
+#   BACKUP_STORAGE_SUPABASE_URL      Supabase project URL (when provider=supabase)
+#   BACKUP_STORAGE_SUPABASE_SERVICE_KEY Supabase service role key (when provider=supabase)
 #   BACKUP_ENCRYPTION_KEY            gpg passphrase used by backup.sh
 #   BACKUP_AGE_IDENTITY_FILE         age identity file, for age-encrypted backups
 #   DATABASE_URL                     Default target database connection string
@@ -51,7 +54,7 @@ die() {
 }
 
 usage() {
-  sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # ---------------------------------------------------------------------------
@@ -110,6 +113,7 @@ BACKUP_NAME="${BACKUP_NAME%.tar.gz.enc}"
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+STORAGE_PROVIDER="${BACKUP_STORAGE_PROVIDER:-s3}"
 BUCKET="${BACKUP_STORAGE_BUCKET:-${BACKUP_BUCKET:-}}"
 ENDPOINT="${BACKUP_STORAGE_ENDPOINT:-${BACKUP_ENDPOINT:-}}"
 PREFIX="${BACKUP_STORAGE_PREFIX:-${BACKUP_PREFIX:-backups}}"
@@ -117,6 +121,8 @@ PREFIX="${PREFIX%/}"
 REGION="${BACKUP_STORAGE_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 export AWS_ACCESS_KEY_ID="${BACKUP_STORAGE_ACCESS_KEY_ID:-${AWS_ACCESS_KEY_ID:-}}"
 export AWS_SECRET_ACCESS_KEY="${BACKUP_STORAGE_SECRET_ACCESS_KEY:-${AWS_SECRET_ACCESS_KEY:-}}"
+SUPABASE_URL="${BACKUP_STORAGE_SUPABASE_URL:-}"
+SUPABASE_SERVICE_KEY="${BACKUP_STORAGE_SUPABASE_SERVICE_KEY:-}"
 BACKUP_ENCRYPTION_KEY="${BACKUP_ENCRYPTION_KEY:-}"
 BACKUP_AGE_IDENTITY_FILE="${BACKUP_AGE_IDENTITY_FILE:-}"
 CONTRACT_STATE_FILE="${CONTRACT_STATE_FILE:-}"
@@ -126,9 +132,23 @@ TARGET_DATABASE_URL="${DATABASE_URL_ARG:-${DATABASE_URL:-}}"
 [[ -n "$BUCKET" ]] || die 1 "BACKUP_STORAGE_BUCKET is not set"
 [[ -n "$TARGET_DATABASE_URL" ]] || die 1 "target database URL is not set (use --database-url or DATABASE_URL)"
 
-for tool in aws psql gzip tar sha256sum; do
+for tool in psql gzip tar sha256sum; do
   command -v "$tool" >/dev/null 2>&1 || die 1 "required tool not found: $tool"
 done
+
+case "$STORAGE_PROVIDER" in
+  s3)
+    command -v aws >/dev/null 2>&1 || die 1 "required tool not found: aws"
+    ;;
+  supabase)
+    command -v curl >/dev/null 2>&1 || die 1 "required tool not found: curl"
+    [[ -n "$SUPABASE_URL" && -n "$SUPABASE_SERVICE_KEY" ]] || \
+      die 1 "Supabase storage requires BACKUP_STORAGE_SUPABASE_URL and BACKUP_STORAGE_SUPABASE_SERVICE_KEY"
+    ;;
+  *)
+    die 1 "unsupported BACKUP_STORAGE_PROVIDER: $STORAGE_PROVIDER (expected s3 or supabase)"
+    ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Working directory
@@ -167,19 +187,52 @@ fi
 
 download_object() {
   local key="$1" dest="$2"
-  log "downloading s3://$BUCKET/$key"
-  aws "${AWS_ARGS[@]}" s3 cp "s3://$BUCKET/$key" "$dest" --only-show-errors \
-    || die 2 "failed to download $key"
+  case "$STORAGE_PROVIDER" in
+    s3)
+      log "downloading s3://$BUCKET/$key"
+      aws "${AWS_ARGS[@]}" s3 cp "s3://$BUCKET/$key" "$dest" --only-show-errors \
+        || die 2 "failed to download $key"
+      ;;
+    supabase)
+      log "downloading supabase://$BUCKET/$key"
+      local url="${SUPABASE_URL%/}/storage/v1/object/${BUCKET}/${key}"
+      curl -fsS \
+        -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" \
+        --max-time "${BACKUP_DOWNLOAD_TIMEOUT:-300}" \
+        -o "$dest" \
+        "$url" \
+        || die 2 "failed to download $key from Supabase Storage"
+      ;;
+  esac
 }
 
 latest_backup_name() {
   # Backup names embed a UTC timestamp, so lexical order is chronological.
-  aws "${AWS_ARGS[@]}" s3 ls "s3://$BUCKET/$PREFIX/" \
-    | awk '{print $4}' \
-    | grep -E '\.manifest\.json$' \
-    | sort \
-    | tail -n 1 \
-    | sed 's/\.manifest\.json$//'
+  case "$STORAGE_PROVIDER" in
+    s3)
+      aws "${AWS_ARGS[@]}" s3 ls "s3://$BUCKET/$PREFIX/" \
+        | awk '{print $4}' \
+        | grep -E '\.manifest\.json$' \
+        | sort \
+        | tail -n 1 \
+        | sed 's/\.manifest\.json$//'
+      ;;
+    supabase)
+      local list_url="${SUPABASE_URL%/}/storage/v1/object/list/${BUCKET}"
+      local body
+      body="$(printf '{"prefix":"%s","limit":1000,"sortBy":{"column":"name","order":"asc"}}' "$PREFIX")"
+      curl -fsS \
+        -X POST \
+        -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" \
+        -H "Content-Type: application/json" \
+        --data "$body" \
+        "$list_url" \
+        | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+\.manifest\.json"' \
+        | sed -E 's/.*"([^"]+)\.manifest\.json"/\1/' \
+        | sort \
+        | tail -n 1
+      ;;
+  esac
 }
 
 # Read a string field from the manifest written by backup.sh. The manifest has
@@ -204,7 +257,7 @@ with_database() {
 # ---------------------------------------------------------------------------
 if [[ -z "$BACKUP_NAME" ]]; then
   BACKUP_NAME="$(latest_backup_name || true)"
-  [[ -n "$BACKUP_NAME" ]] || die 2 "no backups found under s3://$BUCKET/$PREFIX/"
+  [[ -n "$BACKUP_NAME" ]] || die 2 "no backups found under ${STORAGE_PROVIDER}://$BUCKET/$PREFIX/"
   log "no --backup given; using newest backup: $BACKUP_NAME"
 fi
 

@@ -42,11 +42,11 @@ Kubernetes ConfigMap. Restart the backend afterwards to pick up the change.
 
 ---
 
-## Mainnet deployment safety checks
+## Mainnet deployment safety checks & production requirements
 
-Before deploying to mainnet, the automated script runs a set of pre-flight checks
-and requires explicit confirmation:
+While the quickstart steps below focus on **Testnet**, deploying to **Stellar Mainnet** requires strict operational controls in addition to the automated script's pre-flight checks:
 
+### 1. Automated script pre-flight checks
 - **Network guard** — refuses to run against mainnet unless `--network mainnet`
   is passed explicitly; defaults to testnet.
 - **Keypair validation** — verifies the deployer secret key is present, well-formed,
@@ -57,8 +57,16 @@ and requires explicit confirmation:
   against the recorded hashes to detect unintended changes.
 - **Contract ID check** — warns if any target contract ID already exists on-chain.
 - **Confirmation prompt** — prints a summary of the network, deployer, contract IDs
-  and WASM hashes, then requires you to type `yes` to proceed. Any other input aborts
-  the deployment.
+  and WASM hashes, then requires you to type `deploy mainnet` (or pass `--yes` in CI) to proceed.
+
+### 2. Mainnet production readiness gate
+Before promoting to Mainnet, verify and sign off on every item below:
+
+- **Dedicated Soroban RPC** — Do **not** use public/shared testnet RPC endpoints (`deploy-contracts.cjs` intentionally has no default RPC URL for `mainnet`). Provision a dedicated, SLA-backed Soroban RPC provider (e.g., Blockdaemon, Validation Cloud, QuickNode, or self-hosted `stellar-rpc`) with rate-limit headroom and a secondary failover endpoint configured in `SOROBAN_RPC_URL`.
+- **Key Custody** — Never generate or store mainnet keys in plain `.env` files on developer laptops. Generate and custody the deployer and admin keys in hardware security modules (HSM), cloud KMS, or a multi-signature Stellar account (`2-of-3` or `3-of-5` signers).
+- **Contract Audits** — Complete an independent security audit of `vault-registry`, `access-lease`, and `subscription` WASM artifacts. Pin the audited git commit SHA and verify the compiled SHA-256 WASM digest before uploading.
+- **Admin Key Handling** — Separate the one-time `DEPLOYER` account from `ADMIN_PUBLIC_KEY`. Set `ADMIN_PUBLIC_KEY` to a dedicated admin/multisig account, restrict backend runtime keys to lease-granting operations only, and rehearse key rotation on testnet before launch.
+- **Monitoring & Alerting Sign-Off** — Confirm Prometheus scrape targets, Alertmanager routing (PagerDuty/Slack), Grafana dashboards (`docs/MONITORING.md`), and automated encrypted backups (`docs/BACKUP-RESTORE.md`) are active and verified prior to opening mainnet traffic.
 
 Only proceed once every check passes and you have reviewed the printed summary.
 
