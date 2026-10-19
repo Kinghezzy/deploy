@@ -84,17 +84,21 @@ jobs:
           SOROBAN_RPC_URL: ${{ vars.SOROBAN_RPC_URL }}
           SOROBAN_NETWORK_PASSPHRASE: ${{ vars.SOROBAN_NETWORK_PASSPHRASE }}
           SOROBAN_CONTRACT_IDS: ${{ vars.SOROBAN_CONTRACT_IDS }}
+          PROM_PUSHGATEWAY_URL: ${{ secrets.PROM_PUSHGATEWAY_URL }}
+          BACKUP_RETENTION_DAYS: ${{ vars.BACKUP_RETENTION_DAYS || '30' }}
           BACKUP_OUTPUT_DIR: backups
           GIT_COMMIT: ${{ github.sha }}
           ENVIRONMENT: production
         run: bash scripts/backup.sh
 
-      - name: Upload backup manifest
+      - name: Upload backup manifest and metrics
         if: always() && steps.config.outputs.ready == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: backup-manifest-${{ github.run_id }}
-          path: backups/*.json
+          path: |
+            backups/*.json
+            backups/*.prom
           if-no-files-found: warn
           retention-days: 30
 
