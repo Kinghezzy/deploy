@@ -101,7 +101,9 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.prefix }}/backend-migrate:${{ steps.meta.outputs.tag }}
             ${{ steps.meta.outputs.prefix }}/backend-migrate:latest
-          cache-from: type=gha,scope=backend
+          cache-from: |
+            type=gha,scope=backend-migrate
+            type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend-migrate
 
       - name: Build and push frontend image
