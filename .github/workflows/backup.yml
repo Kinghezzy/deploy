@@ -1,22 +1,9 @@
-name: Database Backup
+name: Backup
 
 on:
   schedule:
-    # Daily backup at 02:00 UTC
     - cron: '0 2 * * *'
-    # Weekly restore verification, Sundays at 04:00 UTC
-    - cron: '0 4 * * 0'
   workflow_dispatch:
-    inputs:
-      job:
-        description: 'What to run'
-        required: true
-        default: 'backup'
-        type: choice
-        options:
-          - backup
-          - verify-restore
-          - both
 
 permissions:
   contents: read
@@ -33,44 +20,13 @@ env:
 
 jobs:
   backup:
-    name: Run Database Backup
-    if: >-
-      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * *') ||
-      (github.event_name == 'workflow_dispatch' && inputs.job != 'verify-restore')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Check configuration
-        id: config
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
-          BACKUP_STORAGE_BUCKET: ${{ secrets.BACKUP_STORAGE_BUCKET }}
-        run: |
-          missing=()
-          [[ -n "$DATABASE_URL" ]] || missing+=(DATABASE_URL)
-          [[ -n "$BACKUP_ENCRYPTION_KEY" ]] || missing+=(BACKUP_ENCRYPTION_KEY)
-          [[ -n "$BACKUP_STORAGE_BUCKET" ]] || missing+=(BACKUP_STORAGE_BUCKET)
-          if (( ${#missing[@]} )); then
-            echo "::warning::Backup skipped: repository secrets not configured: ${missing[*]}. See docs/BACKUP-RESTORE.md."
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Install PostgreSQL client
-        if: steps.config.outputs.ready == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-common
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y --no-install-recommends "postgresql-client-${PG_CLIENT_VERSION}" gnupg gzip
-          pg_dump --version
-
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable # stable
       - name: Run backup script
         if: steps.config.outputs.ready == 'true'
         env:
@@ -120,33 +76,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Check configuration
-        id: config
-        env:
-          STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-          BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
-          BACKUP_STORAGE_BUCKET: ${{ secrets.BACKUP_STORAGE_BUCKET }}
-        run: |
-          missing=()
-          [[ -n "$STAGING_DATABASE_URL" ]] || missing+=(STAGING_DATABASE_URL)
-          [[ -n "$BACKUP_ENCRYPTION_KEY" ]] || missing+=(BACKUP_ENCRYPTION_KEY)
-          [[ -n "$BACKUP_STORAGE_BUCKET" ]] || missing+=(BACKUP_STORAGE_BUCKET)
-          if (( ${#missing[@]} )); then
-            echo "::warning::Restore verification skipped: repository secrets not configured: ${missing[*]}. See docs/BACKUP-RESTORE.md."
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2 # v2
 
-      - name: Install PostgreSQL client
-        if: steps.config.outputs.ready == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-common
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y --no-install-recommends "postgresql-client-${PG_CLIENT_VERSION}" gnupg gzip
-          psql --version
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4 # v4
 
+      - name: Run backup
+        run: ./scripts/backup.sh
       - name: Run restore verification
         if: steps.config.outputs.ready == 'true'
         env:
