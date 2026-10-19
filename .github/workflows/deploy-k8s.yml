@@ -195,11 +195,59 @@ jobs:
           kubectl kustomize . | grep -E '^\s+image:'
 
       - name: Apply manifests
+        id: apply
         if: steps.config.outputs.ready == 'true'
         run: |
           kubectl apply -k k8s/
-          kubectl -n synapsvault rollout status deployment/backend --timeout=300s
-          kubectl -n synapsvault rollout status deployment/frontend --timeout=180s
+          # Track which deployments have been rolled out so a failure can be
+          # rolled back precisely. Each successful rollout is recorded.
+          : > "$RUNNER_TEMP/rolled_out"
+          if kubectl -n synapsvault rollout status deployment/backend --timeout=300s; then
+            echo "backend" >> "$RUNNER_TEMP/rolled_out"
+          else
+            echo "backend" >> "$RUNNER_TEMP/failed"
+            exit 1
+          fi
+          if kubectl -n synapsvault rollout status deployment/frontend --timeout=180s; then
+            echo "frontend" >> "$RUNNER_TEMP/rolled_out"
+          else
+            echo "frontend" >> "$RUNNER_TEMP/failed"
+            exit 1
+          fi
+
+      - name: Roll back failed rollout
+        if: failure() && steps.config.outputs.ready == 'true' && steps.apply.outcome == 'failure'
+        run: |
+          {
+            echo "### Rollback"
+            echo ""
+            echo "A rollout failed; attempting \`kubectl rollout undo\` for the affected deployment(s)."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failed_file="$RUNNER_TEMP/failed"
+          if [[ ! -s "$failed_file" ]]; then
+            # Fall back to rolling back both deployments if we cannot tell
+            # which one failed (e.g. the apply step failed before recording).
+            printf 'backend\nfrontend\n' > "$failed_file"
+          fi
+
+          rollback_failed=0
+          while read -r deployment; do
+            [[ -z "$deployment" ]] && continue
+            echo "Rolling back deployment/$deployment..."
+            if kubectl -n synapsvault rollout undo "deployment/$deployment"; then
+              echo "- \`deployment/$deployment\`: rolled back" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- \`deployment/$deployment\`: rollback FAILED" >> "$GITHUB_STEP_SUMMARY"
+              rollback_failed=1
+            fi
+          done < "$failed_file"
+
+          if [[ "$rollback_failed" -ne 0 ]]; then
+            echo "::error::One or more rollbacks failed; manual intervention required."
+            exit 1
+          fi
 
       - name: Verify deployment
         if: steps.config.outputs.ready == 'true'
