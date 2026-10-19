@@ -69,6 +69,11 @@ CMD ["npx", "--no-install", "drizzle-kit", "migrate"]
 FROM node:${NODE_VERSION}-alpine AS runtime
 WORKDIR /app
 
+# tini runs as PID 1 so it reaps zombies and forwards SIGTERM/SIGINT to Node,
+# letting the server shut down gracefully during rollouts instead of being
+# killed abruptly.
+RUN apk add --no-cache tini
+
 ENV NODE_ENV=production \
     PORT=3000
 
@@ -85,4 +90,6 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD wget -qO- "http://127.0.0.1:${PORT}/health" >/dev/null || exit 1
 
+# tini as PID 1 forwards signals to node and reaps orphaned children.
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/index.js"]
