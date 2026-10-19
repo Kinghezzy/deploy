@@ -73,7 +73,7 @@ To preview what will be applied without changing the cluster:
 kubectl kustomize k8s/
 ```
 
-The manifests reference images by the `:latest` tag. To deploy a specific build, pin the tags first (this is what CI does):
+The manifests reference images by a pinned tag (not `:latest`), so a plain `kubectl apply -k k8s/` deploys a known, reproducible build. To deploy a different build, pin the tags first (this is what CI does):
 
 ```sh
 cd k8s
@@ -82,6 +82,8 @@ kustomize edit set image \
   backend-migrate=ghcr.io/synapsvault/deploy/backend-migrate:<sha> \
   frontend=ghcr.io/synapsvault/deploy/frontend:<sha>
 ```
+
+Replace `<sha>` with the commit SHA (or any immutable tag/digest) of the build you want to run. Using a digest (`@sha256:...`) is also supported and is the most reproducible option. Commit the resulting `k8s/kustomization.yaml` change if you want the pin to persist.
 
 ### Continuous deployment
 
@@ -198,8 +200,9 @@ Look at the `Liveness`/`Readiness` sections and the `Events` at the bottom for p
 
 ## Troubleshooting
 
-- **Pods stuck in `Pending`** — check node capacity and scheduling events: `kubectl describe pod <pod> -n synapsvault`.
-- **Pods in `CrashLoopBackOff`** — check logs: `kubectl logs <pod> -n synapsvault --previous`.
-- **Ingress has no address** — confirm an ingress controller is installed and running.
-- **TLS certificate not issued** — check cert-manager: `kubectl describe certificate -n synapsvault` and `kubectl describe certificaterequest -n synapsvault`.
-- **HPA shows `<unknown>` targets** — metrics-server is missing or not ready.
+- **Pods stuck in `Pending`** — check node capacity and scheduling constraints (`kubectl describe pod <pod> -n synapsvault`), and confirm the cluster has enough CPU/memory for the requested resources.
+- **Pods in `ImagePullBackOff` / `ErrImagePull`** — verify the image tag/digest you pinned actually exists in `ghcr.io/synapsvault/deploy/*` and that the cluster can pull from GHCR (image pull secret if the packages are private).
+- **`CrashLoopBackOff`** — inspect `kubectl logs <pod> -n synapsvault --previous` and confirm the `backend-secret` keys are present and valid.
+- **Ingress has no address** — confirm an ingress controller is installed and running (`kubectl get pods -n ingress-nginx`).
+- **TLS certificate not issued** — check the `Certificate`/`Order`/`Challenge` resources and the cert-manager logs; confirm the `ClusterIssuer` is ready.
+- **HPA shows `<unknown>` targets** — metrics-server is missing or not ready; see section 6.
