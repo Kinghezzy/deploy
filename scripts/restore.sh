@@ -14,6 +14,11 @@
 #                          from the backup came back, then drop it
 #   --work-dir <dir>       Working directory for downloads (default: mktemp -d)
 #   --keep-work-dir        Do not delete the working directory on exit
+#   --post-restore-sql <f> Optional SQL script to run against Postgres after
+#                          restoring (aliases $CONTRACT_STATE_FILE). Note: this
+#                          is a PostgreSQL .sql script, NOT the on-chain JSON
+#                          snapshots under contracts/ in the backup archive.
+#   --skip-contract-state  Do not apply CONTRACT_STATE_FILE / --post-restore-sql
 #   --skip-contract-state  Do not re-apply CONTRACT_STATE_FILE after restore
 #   -y, --yes              Skip interactive confirmation when restoring over a
 #                          non-throwaway target database
@@ -32,7 +37,10 @@
 #   BACKUP_ENCRYPTION_KEY            gpg passphrase used by backup.sh
 #   BACKUP_AGE_IDENTITY_FILE         age identity file, for age-encrypted backups
 #   DATABASE_URL                     Default target database connection string
-#   CONTRACT_STATE_FILE              Optional SQL file to apply after restore
+#   CONTRACT_STATE_FILE              Optional post-restore PostgreSQL .sql file
+#                                    (e.g. to update contract ID rows in DB;
+#                                    for repointing env/ConfigMap contract IDs,
+#                                    use scripts/rollback-contracts.cjs instead)
 #
 # Exit codes:
 #   0  success
@@ -56,6 +64,7 @@ die() {
 }
 
 usage() {
+  sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
   sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
 }
 
@@ -69,6 +78,7 @@ ASSUME_YES="false"
 WORK_DIR=""
 KEEP_WORK_DIR="false"
 SKIP_CONTRACT_STATE="false"
+POST_RESTORE_SQL_ARG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -98,6 +108,11 @@ while [[ $# -gt 0 ]]; do
     --keep-work-dir)
       KEEP_WORK_DIR="true"
       shift
+      ;;
+    --post-restore-sql)
+      [[ $# -ge 2 ]] || die 1 "--post-restore-sql requires a path to a .sql file"
+      POST_RESTORE_SQL_ARG="$2"
+      shift 2
       ;;
     --skip-contract-state)
       SKIP_CONTRACT_STATE="true"
@@ -349,16 +364,20 @@ restore_into() {
 apply_contract_state() {
   local url="$1"
   if [[ "$SKIP_CONTRACT_STATE" == "true" ]]; then
-    log "skipping contract state re-application (--skip-contract-state)"
+    log "skipping post-restore SQL application (--skip-contract-state)"
     return 0
   fi
-  if [[ -z "$CONTRACT_STATE_FILE" ]]; then
-    log "no CONTRACT_STATE_FILE configured; skipping contract state re-application"
+  local sql_file="${POST_RESTORE_SQL_ARG:-${CONTRACT_STATE_FILE:-}}"
+  if [[ -z "$sql_file" ]]; then
+    log "no CONTRACT_STATE_FILE / --post-restore-sql configured; skipping post-restore SQL"
     return 0
   fi
-  [[ -f "$CONTRACT_STATE_FILE" ]] || die 4 "contract state file not found: $CONTRACT_STATE_FILE"
-  log "re-applying contract state from $CONTRACT_STATE_FILE"
-  psql_exec "$url" -f "$CONTRACT_STATE_FILE" || die 4 "failed to re-apply contract state"
+  [[ -f "$sql_file" ]] || die 4 "post-restore SQL file not found: $sql_file"
+  if [[ "$sql_file" == *.json ]]; then
+    die 1 "CONTRACT_STATE_FILE ($sql_file) must be a PostgreSQL .sql script, not a JSON contract snapshot (use scripts/rollback-contracts.cjs to repoint on-chain contract IDs)"
+  fi
+  log "applying post-restore SQL from $sql_file"
+  psql_exec "$url" -f "$sql_file" || die 4 "failed to apply post-restore SQL from $sql_file"
 }
 
 # ---------------------------------------------------------------------------

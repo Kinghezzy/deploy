@@ -3,6 +3,10 @@
 # that repository; this file lives in the deploy repo.
 
 ARG NODE_VERSION=22
+# The frontend repo has no lockfile and conflicting peer dependencies, which
+# crash npm's resolver; --legacy-peer-deps works around it until fixed upstream
+# (tracked in https://github.com/SynapsVault/frontend/issues).
+ARG NPM_FLAGS=--legacy-peer-deps
 # Once the upstream lockfile and peer dependencies are resolved, drop the
 # --legacy-peer-deps flag (override with --build-arg NPM_FLAGS=--legacy-peer-deps if needed).
 ARG NPM_FLAGS=""
