@@ -43,6 +43,43 @@ Kubernetes ConfigMap. Restart the backend afterwards to pick up the change.
 
 ---
 
+## Updating the backend ConfigMap after a contract deploy
+
+The backend ConfigMap (`k8s/configmap.yaml`) tracks the contract IDs in Git so
+that `kubectl apply` and the running config never drift. The keys are:
+
+```yaml
+STELLAR_CONTRACT_VAULT_REGISTRY: "CC..."
+STELLAR_CONTRACT_ACCESS_LEASE: "CD..."
+STELLAR_CONTRACT_SUBSCRIPTION: "CE..."
+```
+
+After a contract deploy, update them in Git and re-apply:
+
+```bash
+# 1. Deploy (writes contract-ids.env) — see the automated section above
+npm run deploy:contracts -- --network testnet
+
+# 2. Copy the new IDs from contract-ids.env into k8s/configmap.yaml
+#    (replace the placeholder values for the three STELLAR_CONTRACT_* keys)
+
+# 3. Commit the ConfigMap change so Git stays the source of truth
+git add k8s/configmap.yaml
+git commit -m "chore: update contract IDs in backend ConfigMap"
+
+# 4. Apply and restart the backend to pick up the new IDs
+kubectl apply -f k8s/configmap.yaml
+kubectl rollout restart deployment/backend
+```
+
+> **Rollback:** `npm run rollback:contracts -- --backup contract-ids.env.<timestamp>
+> --configmap backend-config` merge-patches the live ConfigMap. Always mirror the
+> resulting IDs back into `k8s/configmap.yaml` and commit, otherwise the next
+> `kubectl apply` will revert the running config to the stale Git values.
+
+---
+
+## Mainnet deployment safety checks
 ## Mainnet deployment safety checks & production requirements
 
 While the quickstart steps below focus on **Testnet**, deploying to **Stellar Mainnet** requires strict operational controls in addition to the automated script's pre-flight checks:
