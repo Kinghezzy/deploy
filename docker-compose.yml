@@ -153,7 +153,7 @@ services:
       - app_network
 
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:13.2.4
     container_name: app_grafana
     restart: unless-stopped
     profiles:
