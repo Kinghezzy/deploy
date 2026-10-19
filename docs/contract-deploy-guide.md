@@ -8,6 +8,72 @@ This guide walks through deploying the Soroban contracts and wiring up the backe
 - Stellar CLI (`stellar`)
 - A funded deployer account on the target network
 - Backend environment configured (see `.env.example`)
+---
+
+## Automated deployment (preferred)
+
+```bash
+# 1. Build the WASM in your SynapsVault/contracts checkout
+(cd ../contracts && cargo build --target wasm32-unknown-unknown --release --workspace)
+
+# 2. Keep a copy of the current IDs so you can roll back later
+cp contract-ids.env "contract-ids.env.$(date -u +%Y%m%dT%H%M%SZ)" 2>/dev/null || true
+
+# 3. Deploy all contracts (uploads WASM, deploys, calls init(admin), verifies,
+#    writes contract-ids.env). Add --dry-run to run only the pre-flight checks.
+STELLAR_SECRET_KEY=S... \
+ADMIN_PUBLIC_KEY=G...   `# optional; defaults to the deployer` \
+CONTRACTS_WASM_DIR=../contracts/target/wasm32-unknown-unknown/release \
+npm run deploy:contracts -- --network testnet
+
+# Roll back: point the backend at a previous set of contract IDs
+npm run rollback:contracts -- --backup contract-ids.env.<timestamp> \
+  --network testnet --target-env .env [--configmap backend-config] [--dry-run]
+```
+
+The deploy script performs pre-flight checks (valid key, funded account, WASM
+present), deploys `vault-registry`, `access-lease` and `subscription`,
+initialises each with `init(admin)`, and writes the resulting contract IDs to
+`contract-ids.env`. Mainnet requires typing a confirmation, or `--yes` in CI.
+
+Soroban contracts are immutable, so rollback never removes anything on-chain:
+it verifies that each contract in the backup file still exists on-chain, then
+rewrites those IDs in the target `.env` file and (optionally) merge-patches the
+Kubernetes ConfigMap. Restart the backend afterwards to pick up the change.
+
+---
+
+## Mainnet deployment safety checks & production requirements
+
+While the quickstart steps below focus on **Testnet**, deploying to **Stellar Mainnet** requires strict operational controls in addition to the automated script's pre-flight checks:
+
+### 1. Automated script pre-flight checks
+- **Network guard** — refuses to run against mainnet unless `--network mainnet`
+  is passed explicitly; defaults to testnet.
+- **Keypair validation** — verifies the deployer secret key is present, well-formed,
+  and matches the expected public key.
+- **Balance check** — confirms the deployer account holds enough XLM to cover
+  upload and deployment fees.
+- **WASM hash check** — builds the contracts and compares the resulting WASM hashes
+  against the recorded hashes to detect unintended changes.
+- **Contract ID check** — warns if any target contract ID already exists on-chain.
+- **Confirmation prompt** — prints a summary of the network, deployer, contract IDs
+  and WASM hashes, then requires you to type `deploy mainnet` (or pass `--yes` in CI) to proceed.
+
+### 2. Mainnet production readiness gate
+Before promoting to Mainnet, verify and sign off on every item below:
+
+- **Dedicated Soroban RPC** — Do **not** use public/shared testnet RPC endpoints (`deploy-contracts.cjs` intentionally has no default RPC URL for `mainnet`). Provision a dedicated, SLA-backed Soroban RPC provider (e.g., Blockdaemon, Validation Cloud, QuickNode, or self-hosted `stellar-rpc`) with rate-limit headroom and a secondary failover endpoint configured in `SOROBAN_RPC_URL`.
+- **Key Custody** — Never generate or store mainnet keys in plain `.env` files on developer laptops. Generate and custody the deployer and admin keys in hardware security modules (HSM), cloud KMS, or a multi-signature Stellar account (`2-of-3` or `3-of-5` signers).
+- **Contract Audits** — Complete an independent security audit of `vault-registry`, `access-lease`, and `subscription` WASM artifacts. Pin the audited git commit SHA and verify the compiled SHA-256 WASM digest before uploading.
+- **Admin Key Handling** — Separate the one-time `DEPLOYER` account from `ADMIN_PUBLIC_KEY`. Set `ADMIN_PUBLIC_KEY` to a dedicated admin/multisig account, restrict backend runtime keys to lease-granting operations only, and rehearse key rotation on testnet before launch.
+- **Monitoring & Alerting Sign-Off** — Confirm Prometheus scrape targets, Alertmanager routing (PagerDuty/Slack), Grafana dashboards (`docs/MONITORING.md`), and automated encrypted backups (`docs/BACKUP-RESTORE.md`) are active and verified prior to opening mainnet traffic.
+
+Only proceed once every check passes and you have reviewed the printed summary.
+
+---
+
+## Prerequisites (install once)
 
 ## 1. Build the contracts
 
@@ -143,3 +209,50 @@ After any rotation, update every place the key is referenced:
 After updating, confirm no service still references the old key (search secret
 stores and CI config for the old public key) and that the backend and admin
 operations succeed with the new keys.
+## Rotating a Compromised Contract Admin or Backend Signing Key
+
+If the contract `admin` key or the backend signing key (`BACKEND_SECRET` / `STELLAR_SECRET_KEY`) is compromised:
+
+1. **Generate a fresh keypair**:
+   ```bash
+   node scripts/01-generate-keypairs.js
+   ```
+   Fund the new account before proceeding (`node scripts/02-fund-accounts.js GNEW...` on testnet, or transfer XLM on mainnet).
+
+2. **Rotate on-chain contract admin**:
+   - **Contracts supporting admin transfer**: invoke `set_admin` on `access-lease` and `subscription` using the current admin signer to transfer authority to `GNEW_BACKEND_PUBLIC`:
+     ```bash
+     stellar contract invoke \
+       --id "$STELLAR_CONTRACT_ACCESS_LEASE" \
+       --source current_admin --network testnet \
+       -- set_admin --new_admin GNEW_BACKEND_PUBLIC
+
+     stellar contract invoke \
+       --id "$STELLAR_CONTRACT_SUBSCRIPTION" \
+       --source current_admin --network testnet \
+       -- set_admin --new_admin GNEW_BACKEND_PUBLIC
+     ```
+   - **Immutable contracts or lost admin key**: redeploy the contracts initialized with the new admin key using `deploy-contracts.cjs`:
+     ```bash
+     rm -f contract-ids.env
+     STELLAR_SECRET_KEY=SNEW_DEPLOYER_SECRET \
+     ADMIN_PUBLIC_KEY=GNEW_BACKEND_PUBLIC \
+     npm run deploy:contracts -- --network testnet
+     ```
+
+3. **Update backend secrets and contract IDs**:
+   - Replace `STELLAR_SECRET_KEY` / `BACKEND_SECRET_KEY` in your secret store (`backend-secret` in Kubernetes or Railway environment variables).
+   - If new contract instances were deployed, propagate the new `contract-ids.env` values to the backend environment and restart the service.
+   - Verify with `node scripts/06-smoke-test.js`.
+
+---
+
+## Troubleshooting
+
+| Error | Fix |
+|-------|-----|
+| `account not found` | Fund the account with Friendbot first |
+| `Error: wasm too large` | Run with `--release` flag |
+| `insufficient balance` | Fund deployer wallet — needs XLM for fees |
+| `contract already exists` | Use `--wasm-hash` flag to reuse existing upload |
+| `Error: HostError: Value(InvalidInput)` | Check argument types match contract signature |
