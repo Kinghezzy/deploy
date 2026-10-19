@@ -1,225 +1,145 @@
-# Deploy SynapsVault Contracts to Stellar Testnet
+# Contract Deploy Guide
 
-Run these steps **once locally** from your machine. Takes ~20 minutes total.
+This guide walks through deploying the Soroban contracts and wiring up the backend.
 
-> **Preferred path:** use the automated scripts `scripts/deploy-contracts.cjs` and
-> `scripts/rollback-contracts.cjs` (or the **Deploy Contracts** GitHub Actions
-> workflow). The manual Stellar CLI steps below are kept as a fallback for
-> debugging or when the scripts are unavailable.
+## Prerequisites
 
----
+- Rust toolchain with the `wasm32-unknown-unknown` target
+- Stellar CLI (`stellar`)
+- A funded deployer account on the target network
+- Backend environment configured (see `.env.example`)
 
-## Automated deployment (preferred)
-
-```bash
-# 1. Build the WASM in your SynapsVault/contracts checkout
-(cd ../contracts && cargo build --target wasm32-unknown-unknown --release --workspace)
-
-# 2. Keep a copy of the current IDs so you can roll back later
-cp contract-ids.env "contract-ids.env.$(date -u +%Y%m%dT%H%M%SZ)" 2>/dev/null || true
-
-# 3. Deploy all contracts (uploads WASM, deploys, calls init(admin), verifies,
-#    writes contract-ids.env). Add --dry-run to run only the pre-flight checks.
-STELLAR_SECRET_KEY=S... \
-ADMIN_PUBLIC_KEY=G...   `# optional; defaults to the deployer` \
-CONTRACTS_WASM_DIR=../contracts/target/wasm32-unknown-unknown/release \
-npm run deploy:contracts -- --network testnet
-
-# Roll back: point the backend at a previous set of contract IDs
-npm run rollback:contracts -- --backup contract-ids.env.<timestamp> \
-  --network testnet --target-env .env [--configmap backend-config] [--dry-run]
-```
-
-The deploy script performs pre-flight checks (valid key, funded account, WASM
-present), deploys `vault-registry`, `access-lease` and `subscription`,
-initialises each with `init(admin)`, and writes the resulting contract IDs to
-`contract-ids.env`. Mainnet requires typing a confirmation, or `--yes` in CI.
-
-Soroban contracts are immutable, so rollback never removes anything on-chain:
-it verifies that each contract in the backup file still exists on-chain, then
-rewrites those IDs in the target `.env` file and (optionally) merge-patches the
-Kubernetes ConfigMap. Restart the backend afterwards to pick up the change.
-
----
-
-## Mainnet deployment safety checks
-
-Before deploying to mainnet, the automated script runs a set of pre-flight checks
-and requires explicit confirmation:
-
-- **Network guard** — refuses to run against mainnet unless `--network mainnet`
-  is passed explicitly; defaults to testnet.
-- **Keypair validation** — verifies the deployer secret key is present, well-formed,
-  and matches the expected public key.
-- **Balance check** — confirms the deployer account holds enough XLM to cover
-  upload and deployment fees.
-- **WASM hash check** — builds the contracts and compares the resulting WASM hashes
-  against the recorded hashes to detect unintended changes.
-- **Contract ID check** — warns if any target contract ID already exists on-chain.
-- **Confirmation prompt** — prints a summary of the network, deployer, contract IDs
-  and WASM hashes, then requires you to type `yes` to proceed. Any other input aborts
-  the deployment.
-
-Only proceed once every check passes and you have reviewed the printed summary.
-
----
-
-## Prerequisites (install once)
+## 1. Build the contracts
 
 ```bash
-# 1. Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-rustup target add wasm32-unknown-unknown
-
-# 2. Stellar CLI (the scripts fall back to the legacy `soroban` CLI)
-#    See https://developers.stellar.org/docs/tools/cli
-
-# 3. Verify
-stellar --version
+cargo build --target wasm32-unknown-unknown --release
 ```
 
----
+Artifacts are written to `target/wasm32-unknown-unknown/release/*.wasm`.
 
-## Step 1 — Generate keypairs
+## 2. Deploy
 
 ```bash
-cd deploy   # this repository; clone SynapsVault/contracts next to it
-node scripts/01-generate-keypairs.js
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/<contract>.wasm \
+  --source <deployer-secret-key> \
+  --network <network>
 ```
 
-Save all 5 keypairs in a password manager. You need:
-- **DEPLOYER** secret key — for deploying contracts
-- **BACKEND** public key — set as the admin of access-lease + subscription
-- **PUBLISHER1/2** — for seeding the catalog
-- **BUYER1** — for testing purchases
+Record the returned contract ID and the deployer public key.
 
----
-
-## Step 2 — Fund all accounts
+## 3. Initialize
 
 ```bash
-node scripts/02-fund-accounts.js \
-  GDEPLOYER... GBACKEND... GPUBLISHER1... GPUBLISHER2... GBUYER1...
+stellar contract invoke \
+  --id <contract-id> \
+  --source <admin-secret-key> \
+  --network <network> \
+  -- initialize --admin <admin-public-key>
 ```
 
-Each account gets 10,000 XLM on testnet — free, takes ~5 seconds.
+The account passed as `--admin` becomes the contract admin and is the only
+account allowed to perform privileged operations (e.g. setting the backend
+signer, pausing, upgrading).
 
-Check balances at: https://stellar.expert/explorer/testnet
+## 4. Configure the backend
+
+Set the contract IDs and the backend signing key in the backend environment
+(see `.env.example` for the full list of variables).
 
 ---
 
-## Step 3 — Build + deploy contracts (manual fallback)
+## Key rotation
 
-> Prefer `npm run deploy:contracts` (see above). Use the manual steps below
-> only if the automated script is unavailable.
+Privileged keys can be compromised or need periodic rotation. The table below
+summarizes the roles and how each is rotated.
 
-```bash
-export DEPLOYER_SECRET=Syour_deployer_secret_key_here
-export CONTRACTS_DIR=../contracts   # your SynapsVault/contracts checkout
+| Role | Where it lives | Rotation mechanism |
+| --- | --- | --- |
+| Contract admin | On-chain admin account | `set_admin` (admin-signed) |
+| Deployer | Off-chain keypair used for `stellar contract deploy` | New keypair; no on-chain state to change |
+| Backend signer | Backend wallet / signing key | `set_signer` (admin-signed) + backend secret update |
 
-bash scripts/03-deploy-contracts.sh
-```
+> Always rotate to a **freshly generated** keypair. Never reuse a key that may
+> have been exposed.
 
-This will:
-1. Build all 3 contracts to WASM (`~3 minutes`)
-2. Deploy `vault-registry` → prints contract ID
-3. Deploy `access-lease` → prints contract ID
-4. Deploy `subscription` → prints contract ID
-5. Save all IDs to `contract-ids.env`
+### Rotating the contract admin
 
-**Expected output:**
-```
-▸ Building WASM contracts…
-✅ Build complete
+1. Generate a new admin keypair and fund it on the target network.
+2. From the **current** admin account, transfer the admin role:
 
-▸ Deploying vault_registry…
-  Contract ID: CCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+   ```bash
+   stellar contract invoke \
+     --id <contract-id> \
+     --source <current-admin-secret-key> \
+     --network <network> \
+     -- set_admin --new_admin <new-admin-public-key>
+   ```
 
-▸ Deploying access_lease…
-  Contract ID: CDXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+3. Verify the new admin is active by performing a harmless admin-only call
+   (e.g. reading the current signer) signed with the new key.
+4. Revoke/retire the old admin key: remove it from any secret store and stop
+   using it. If it was compromised, treat all admin-signed history as suspect
+   and review recent privileged operations.
+5. Update the admin key wherever it is referenced:
+   - CI/CD secrets used for admin operations
+   - Operator password managers / hardware wallets
+   - Any runbooks or docs that name the old key
 
-▸ Deploying subscription…
-  Contract ID: CEXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-```
+### Rotating the deployer
 
----
+The deployer key is only used to submit `stellar contract deploy`. It holds no
+on-chain privileges after deployment, so rotation is purely operational:
 
-## Step 4 — Initialise contracts
+1. Generate a new deployer keypair and fund it.
+2. Update the deployer secret in CI/CD (e.g. the `DEPLOYER_SECRET_KEY` secret)
+   and in any local operator environment.
+3. Remove the old deployer key from all secret stores.
+4. If the old deployer key was compromised, audit deployments made with it and
+   confirm the deployed contract IDs and admin are the expected ones.
 
-```bash
-source contract-ids.env
+### Rotating the backend signing key
 
-export DEPLOYER_SECRET=Syour_deployer_secret_key_here
-export BACKEND_PUBLIC=Gyour_backend_wallet_public_key
+The backend signs transactions with a wallet key. Rotate it as follows:
 
-bash scripts/04-init-contracts.sh
-```
+1. Generate a new backend signing keypair and fund it.
+2. From the **admin** account, point the contract at the new signer:
 
-This calls `init(admin)` on `access-lease` and `subscription`, setting your backend
-wallet as the sole lease-granting authority.
+   ```bash
+   stellar contract invoke \
+     --id <contract-id> \
+     --source <admin-secret-key> \
+     --network <network> \
+     -- set_signer --signer <new-backend-public-key>
+   ```
 
----
+3. Update the backend secret with the new signing key (see config updates
+   below) and redeploy/restart the backend so it picks up the new key.
+4. Verify the backend can submit a signed transaction successfully.
+5. Remove the old signing key from all secret stores.
 
-## Step 5 — Verify on Stellar Expert
+### Config and secret updates
 
-Visit these URLs (replace with your actual contract IDs):
+After any rotation, update every place the key is referenced:
 
-```
-https://stellar.expert/explorer/testnet/contract/CC[vault_registry_id]
-https://stellar.expert/explorer/testnet/contract/CD[access_lease_id]
-https://stellar.expert/explorer/testnet/contract/CE[subscription_id]
-```
+- **Backend environment** — update the relevant variable in `.env` / the
+  deployment environment (see `.env.example` for names such as the backend
+  signing key and contract IDs).
+- **Kubernetes secrets** — update the secret object and restart the affected
+  pods so the new value is loaded:
 
-You should see the contracts with their deployed WASM and storage entries.
+  ```bash
+  kubectl create secret generic <secret-name> \
+    --from-literal=<key-var>=<new-value> \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl rollout restart deployment/<backend-deployment>
+  ```
 
----
+- **CI/CD secrets** — update the deployer/admin secrets in the CI provider so
+  automated deploys and admin operations use the new keys.
+- **Local operator environments** — update `.env` files and password managers;
+  delete the old entries.
 
-## Step 6 — Add contract IDs to backend .env
-
-```env
-STELLAR_CONTRACT_VAULT_REGISTRY=CC...
-STELLAR_CONTRACT_ACCESS_LEASE=CD...
-STELLAR_CONTRACT_SUBSCRIPTION=CE...
-```
-
-Then redeploy the backend (Railway redeploys automatically on env change).
-
----
-
-## Useful Soroban CLI commands
-
-```bash
-# Read vault-registry count
-soroban contract invoke \
-  --id $STELLAR_CONTRACT_VAULT_REGISTRY --source deployer --network testnet \
-  -- count
-
-# Grant a test lease (30 days = 518400 ledgers)
-soroban contract invoke \
-  --id $STELLAR_CONTRACT_ACCESS_LEASE --source deployer --network testnet \
-  -- grant_lease \
-  --resource_id "test-resource-1" \
-  --buyer GBUYER1_PUBLIC_KEY \
-  --duration_ledgers 518400
-
-# Check if valid
-soroban contract invoke \
-  --id $STELLAR_CONTRACT_ACCESS_LEASE --source deployer --network testnet \
-  -- is_valid \
-  --resource_id "test-resource-1" \
-  --buyer GBUYER1_PUBLIC_KEY
-# → true
-```
-
----
-
-## Troubleshooting
-
-| Error | Fix |
-|-------|-----|
-| `account not found` | Fund the account with Friendbot first |
-| `Error: wasm too large` | Run with `--release` flag |
-| `insufficient balance` | Fund deployer wallet — needs XLM for fees |
-| `contract already exists` | Use `--wasm-hash` flag to reuse existing upload |
-| `Error: HostError: Value(InvalidInput)` | Check argument types match contract signature |
+After updating, confirm no service still references the old key (search secret
+stores and CI config for the old public key) and that the backend and admin
+operations succeed with the new keys.
