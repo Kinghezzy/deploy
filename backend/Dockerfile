@@ -8,11 +8,10 @@
 #   migrate            One-shot Drizzle migrations (used as a k8s initContainer)
 
 ARG NODE_VERSION=22
-# The backend's dependency tree has unresolved peer conflicts (e.g.
-# x402-stellar wants @stellar/stellar-sdk@^12 while the app uses ^15), so npm
-# needs --legacy-peer-deps until that is fixed upstream. Override with
-# --build-arg NPM_FLAGS= once it is.
-ARG NPM_FLAGS=--legacy-peer-deps
+# Once upstream peer dependency conflicts (x402-stellar vs @stellar/stellar-sdk)
+# are resolved, drop --legacy-peer-deps by passing --build-arg NPM_FLAGS="" or
+# leaving NPM_FLAGS empty when the lockfile is clean.
+ARG NPM_FLAGS=""
 
 # ---------- Stage 1: All dependencies (build + migrate tooling) ----------
 FROM node:${NODE_VERSION}-alpine AS deps
@@ -26,8 +25,8 @@ COPY package.json package-lock.json* ./
 # Skip lifecycle scripts: the postinstall symlinks packages/registry-client,
 # which is not copied yet. It is vendored explicitly below instead.
 # `npm ci` needs a committed lockfile; fall back to `npm install` without one.
-RUN if [ -f package-lock.json ]; then npm ci --ignore-scripts ${NPM_FLAGS}; \
-    else npm install --ignore-scripts --no-audit --no-fund ${NPM_FLAGS}; fi
+RUN if [ -f package-lock.json ]; then npm ci --ignore-scripts ${NPM_FLAGS} || npm ci --ignore-scripts --legacy-peer-deps; \
+    else npm install --ignore-scripts --no-audit --no-fund ${NPM_FLAGS} || npm install --ignore-scripts --no-audit --no-fund --legacy-peer-deps; fi
 
 # ---------- Stage 2: Production-only dependencies ----------
 FROM node:${NODE_VERSION}-alpine AS prod-deps
@@ -37,8 +36,8 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++
 
 COPY package.json package-lock.json* ./
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev --ignore-scripts ${NPM_FLAGS}; \
-    else npm install --omit=dev --ignore-scripts --no-audit --no-fund ${NPM_FLAGS}; fi
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev --ignore-scripts ${NPM_FLAGS} || npm ci --omit=dev --ignore-scripts --legacy-peer-deps; \
+    else npm install --omit=dev --ignore-scripts --no-audit --no-fund ${NPM_FLAGS} || npm install --omit=dev --ignore-scripts --no-audit --no-fund --legacy-peer-deps; fi
 
 COPY packages/registry-client ./packages/registry-client
 RUN mkdir -p node_modules/@synapsvault && \
@@ -69,6 +68,11 @@ CMD ["npx", "--no-install", "drizzle-kit", "migrate"]
 FROM node:${NODE_VERSION}-alpine AS runtime
 WORKDIR /app
 
+# tini runs as PID 1 so it reaps zombies and forwards SIGTERM/SIGINT to Node,
+# letting the server shut down gracefully during rollouts instead of being
+# killed abruptly.
+RUN apk add --no-cache tini
+
 ENV NODE_ENV=production \
     PORT=3000
 
@@ -85,4 +89,6 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD wget -qO- "http://127.0.0.1:${PORT}/health" >/dev/null || exit 1
 
+# tini as PID 1 forwards signals to node and reaps orphaned children.
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/index.js"]
