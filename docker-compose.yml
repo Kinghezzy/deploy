@@ -114,7 +114,7 @@ services:
       - app_network
 
   prometheus:
-    image: prom/prometheus:v2.53.2
+    image: prom/prometheus:v3.15.0
     container_name: app_prometheus
     restart: unless-stopped
     profiles:
