@@ -26,8 +26,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Match (or exceed) the major version of the Postgres server being dumped;
-  # pg_dump refuses to dump a newer server. Supabase currently runs 15 or 17.
+  # Aligned with the Postgres major version used for local dev (docker-compose.yml)
+  # and production/Supabase. Keep all three on the same major so dumps taken
+  # here restore cleanly into local dev. See docs/BACKUP-RESTORE.md.
   PG_CLIENT_VERSION: '17'
 
 jobs:
