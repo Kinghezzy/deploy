@@ -39,6 +39,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     outputs:
       image-tag: ${{ steps.meta.outputs.tag }}
       image-prefix: ${{ steps.meta.outputs.prefix }}
@@ -79,12 +80,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push backend image
+        id: build-backend
         uses: docker/build-push-action@v7
         with:
           context: ./src/backend
           file: ./backend/Dockerfile
           target: runtime
           push: true
+          provenance: true
+          sbom: true
           tags: |
             ${{ steps.meta.outputs.prefix }}/backend:${{ steps.meta.outputs.tag }}
             ${{ steps.meta.outputs.prefix }}/backend:latest
@@ -92,12 +96,15 @@ jobs:
           cache-to: type=gha,mode=max,scope=backend
 
       - name: Build and push backend migrate image
+        id: build-backend-migrate
         uses: docker/build-push-action@v7
         with:
           context: ./src/backend
           file: ./backend/Dockerfile
           target: migrate
           push: true
+          provenance: true
+          sbom: true
           tags: |
             ${{ steps.meta.outputs.prefix }}/backend-migrate:${{ steps.meta.outputs.tag }}
             ${{ steps.meta.outputs.prefix }}/backend-migrate:latest
@@ -107,11 +114,14 @@ jobs:
           cache-to: type=gha,mode=max,scope=backend-migrate
 
       - name: Build and push frontend image
+        id: build-frontend
         uses: docker/build-push-action@v7
         with:
           context: ./src/frontend
           file: ./frontend/Dockerfile
           push: true
+          provenance: true
+          sbom: true
           build-args: |
             VITE_API_URL=/api
             VITE_NETWORK=${{ vars.STELLAR_NETWORK || 'testnet' }}
@@ -121,10 +131,136 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 
-  deploy:
-    name: Deploy to Cluster
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign backend image (keyless)
+        env:
+          DIGEST: ${{ steps.build-backend.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.prefix }}/backend
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Sign backend migrate image (keyless)
+        env:
+          DIGEST: ${{ steps.build-backend-migrate.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.prefix }}/backend-migrate
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Sign frontend image (keyless)
+        env:
+          DIGEST: ${{ steps.build-frontend.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.prefix }}/frontend
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+  scan:
+    name: Scan Images for Vulnerabilities
     runs-on: ubuntu-latest
     needs: build-and-push
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - backend
+          - backend-migrate
+          - frontend
+    steps:
+      - name: Log in to the container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ needs.build-and-push.outputs.image-prefix }}/${{ matrix.image }}:${{ needs.build-and-push.outputs.image-tag }}
+          format: 'sarif'
+          output: 'trivy-${{ matrix.image }}.sarif'
+          severity: 'CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-${{ matrix.image }}.sarif'
+          category: 'trivy-${{ matrix.image }}'
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-and-push, scan]
+    environment:
+      name: staging
+      url: ${{ vars.DEPLOY_URL }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Check cluster credentials
+        id: config
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG }}
+        run: |
+          if [[ -z "$KUBECONFIG_B64" ]]; then
+            echo "::warning::Deploy skipped: the KUBECONFIG secret is not configured for the staging environment. Images were still built and pushed."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up kubectl
+        if: steps.config.outputs.ready == 'true'
+        uses: azure/setup-kubectl@v5
+        with:
+          version: v1.31.0
+
+      - name: Configure kubeconfig
+        if: steps.config.outputs.ready == 'true'
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          printf '%s' "$KUBECONFIG_B64" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Pin image tags
+        if: steps.config.outputs.ready == 'true'
+        working-directory: ./k8s/overlays/staging
+        env:
+          PREFIX: ${{ needs.build-and-push.outputs.image-prefix }}
+          TAG: ${{ needs.build-and-push.outputs.image-tag }}
+        run: |
+          kustomize edit set image \
+            "backend=${PREFIX}/backend:${TAG}" \
+            "backend-migrate=${PREFIX}/backend-migrate:${TAG}" \
+            "frontend=${PREFIX}/frontend:${TAG}"
+          kubectl kustomize . | grep -E '^\s+image:'
+
+      - name: Apply manifests
+        if: steps.config.outputs.ready == 'true'
+        run: |
+          kubectl apply -k k8s/overlays/staging
+          kubectl -n synapsvault-staging rollout status deployment/backend --timeout=300s
+          kubectl -n synapsvault-staging rollout status deployment/frontend --timeout=180s
+
+      - name: Smoke test
+        id: smoke
+        if: steps.config.outputs.ready == 'true'
+        env:
+          BASE_URL: ${{ vars.DEPLOY_URL }}
+        run: node scripts/06-smoke-test.js
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-and-push, scan, deploy-staging]
     environment:
       name: production
       url: ${{ vars.DEPLOY_URL }}
@@ -161,7 +297,7 @@ jobs:
 
       - name: Pin image tags
         if: steps.config.outputs.ready == 'true'
-        working-directory: ./k8s
+        working-directory: ./k8s/overlays/production
         env:
           PREFIX: ${{ needs.build-and-push.outputs.image-prefix }}
           TAG: ${{ needs.build-and-push.outputs.image-tag }}
@@ -175,14 +311,16 @@ jobs:
       - name: Apply manifests
         if: steps.config.outputs.ready == 'true'
         run: |
+          kubectl apply -k k8s/overlays/production
           kubectl -n synapsvault delete job backend-migrate --ignore-not-found
           kubectl apply -k k8s/
           kubectl -n synapsvault wait --for=condition=complete job/backend-migrate --timeout=180s
           kubectl -n synapsvault rollout status deployment/backend --timeout=300s
           kubectl -n synapsvault rollout status deployment/frontend --timeout=180s
 
-      - name: Verify deployment
+      - name: Smoke test
+        id: smoke
         if: steps.config.outputs.ready == 'true'
-        run: |
-          kubectl -n synapsvault get deployments -o wide
-          kubectl -n synapsvault get pods -o wide
+        env:
+          BASE_URL: ${{ vars.DEPLOY_URL }}
+        run: node scripts/06-smoke-test.js

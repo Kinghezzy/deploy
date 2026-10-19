@@ -44,4 +44,10 @@ images:
     newTag: 0.0.0
   - name: frontend
     newName: ghcr.io/synapsvault/deploy/frontend
+    newTag: latest
+
+# Staging and production are built from this base via the overlays in
+# k8s/overlays/{staging,production}. Build them with:
+#   kustomize build k8s/overlays/staging
+#   kustomize build k8s/overlays/production
     newTag: 0.0.0

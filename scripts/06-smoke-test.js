@@ -13,9 +13,12 @@
  *   BACKEND_URL=https://your-app.railway.app \
  *   ADMIN_API_KEY=your_admin_key \
  *   node scripts/06-smoke-test.js
+ *
+ * The base URL may be passed as the first CLI argument (e.g. from CI):
+ *   node scripts/06-smoke-test.js "$DEPLOY_URL/api"
  */
 
-const BASE      = process.env.BACKEND_URL ?? "http://localhost:3000";
+const BASE      = process.argv[2] ?? process.env.BACKEND_URL ?? "http://localhost:3000";
 const ADMIN_KEY = process.env.ADMIN_API_KEY ?? "change_me";
 
 let passed = 0;
