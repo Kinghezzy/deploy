@@ -60,8 +60,22 @@ RUN mkdir -p node_modules/@synapsvault && \
 RUN npm run build && test -f dist/index.js
 
 # ---------- Target: migrate ----------
-FROM build AS migrate
+# Slim image: only drizzle-kit, the drizzle config and the migrations are
+# needed to run `drizzle-kit migrate`. Avoids shipping the full build stage
+# (dev deps, sources, compilers) in the init container.
+FROM node:${NODE_VERSION}-alpine AS migrate
+ARG NPM_FLAGS
+WORKDIR /app
+
 ENV NODE_ENV=production
+
+# Install drizzle-kit standalone (no app dependency tree required).
+RUN npm install --no-audit --no-fund --ignore-scripts ${NPM_FLAGS} drizzle-kit
+
+# Only the config and migrations are required at runtime.
+COPY drizzle.config.ts ./drizzle.config.ts
+COPY drizzle ./drizzle
+
 USER node
 CMD ["npx", "--no-install", "drizzle-kit", "migrate"]
 
