@@ -39,6 +39,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     outputs:
       image-tag: ${{ steps.meta.outputs.tag }}
       image-prefix: ${{ steps.meta.outputs.prefix }}
@@ -79,12 +80,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push backend image
+        id: build-backend
         uses: docker/build-push-action@v7
         with:
           context: ./src/backend
           file: ./backend/Dockerfile
           target: runtime
           push: true
+          provenance: true
+          sbom: true
           tags: |
             ${{ steps.meta.outputs.prefix }}/backend:${{ steps.meta.outputs.tag }}
             ${{ steps.meta.outputs.prefix }}/backend:latest
@@ -92,12 +96,15 @@ jobs:
           cache-to: type=gha,mode=max,scope=backend
 
       - name: Build and push backend migrate image
+        id: build-backend-migrate
         uses: docker/build-push-action@v7
         with:
           context: ./src/backend
           file: ./backend/Dockerfile
           target: migrate
           push: true
+          provenance: true
+          sbom: true
           tags: |
             ${{ steps.meta.outputs.prefix }}/backend-migrate:${{ steps.meta.outputs.tag }}
             ${{ steps.meta.outputs.prefix }}/backend-migrate:latest
@@ -105,11 +112,14 @@ jobs:
           cache-to: type=gha,mode=max,scope=backend-migrate
 
       - name: Build and push frontend image
+        id: build-frontend
         uses: docker/build-push-action@v7
         with:
           context: ./src/frontend
           file: ./frontend/Dockerfile
           push: true
+          provenance: true
+          sbom: true
           build-args: |
             VITE_API_URL=/api
             VITE_NETWORK=${{ vars.STELLAR_NETWORK || 'testnet' }}
@@ -118,6 +128,27 @@ jobs:
             ${{ steps.meta.outputs.prefix }}/frontend:latest
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign backend image (keyless)
+        env:
+          DIGEST: ${{ steps.build-backend.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.prefix }}/backend
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Sign backend migrate image (keyless)
+        env:
+          DIGEST: ${{ steps.build-backend-migrate.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.prefix }}/backend-migrate
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Sign frontend image (keyless)
+        env:
+          DIGEST: ${{ steps.build-frontend.outputs.digest }}
+          IMAGE: ${{ steps.meta.outputs.prefix }}/frontend
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
   scan:
     name: Scan Images for Vulnerabilities
