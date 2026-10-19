@@ -233,10 +233,12 @@ Then trigger a redeploy in Vercel.
 
 ```bash
 BACKEND_URL=https://[your-railway-app].up.railway.app \
+PUBLISHER1_PUBLIC=G[PUBLISHER1] \
+PUBLISHER2_PUBLIC=G[PUBLISHER2] \
 node scripts/05-seed-catalog.js
 ```
 
-This publishes 3 real resources to the catalog.
+This idempotently publishes the 3 catalog resources (skipping any that already exist) and exits non-zero if validation or seeding fails.
 
 ### Step 9 — Smoke test
 
