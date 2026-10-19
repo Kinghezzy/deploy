@@ -15,6 +15,8 @@
 #   --work-dir <dir>       Working directory for downloads (default: mktemp -d)
 #   --keep-work-dir        Do not delete the working directory on exit
 #   --skip-contract-state  Do not re-apply CONTRACT_STATE_FILE after restore
+#   -y, --yes              Skip interactive confirmation when restoring over a
+#                          non-throwaway target database
 #   -h, --help             Show this help
 #
 # Environment (same names as backup.sh; legacy names in parentheses):
@@ -63,6 +65,7 @@ usage() {
 BACKUP_NAME=""
 DATABASE_URL_ARG=""
 VERIFY_ONLY="false"
+ASSUME_YES="false"
 WORK_DIR=""
 KEEP_WORK_DIR="false"
 SKIP_CONTRACT_STATE="false"
@@ -81,6 +84,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --verify-only)
       VERIFY_ONLY="true"
+      shift
+      ;;
+    -y|--yes)
+      ASSUME_YES="true"
       shift
       ;;
     --work-dir)
@@ -416,12 +423,29 @@ verify_restore() {
   log "verification passed"
 }
 
+confirm_restore() {
+  if [[ "$ASSUME_YES" == "true" ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    die 1 "refusing to restore over a non-throwaway database non-interactively without --yes"
+  fi
+  log "WARNING: about to restore backup '$BACKUP_NAME' over the target database (DROP ... IF EXISTS)."
+  printf 'Type "restore" to confirm: ' >&2
+  local answer=""
+  read -r answer || answer=""
+  if [[ "$answer" != "restore" ]]; then
+    die 1 "restore aborted by user"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 if [[ "$VERIFY_ONLY" == "true" ]]; then
   verify_restore "$TARGET_DATABASE_URL"
 else
+  confirm_restore
   restore_into "$TARGET_DATABASE_URL"
   apply_contract_state "$TARGET_DATABASE_URL"
   log "restore complete"

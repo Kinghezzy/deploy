@@ -5,7 +5,9 @@ metadata:
   labels:
     app: backend
 spec:
-  replicas: 2
+  # Replicas are intentionally omitted here because HorizontalPodAutoscaler/backend
+  # manages the replica count (2-10). Setting replicas on the Deployment would
+  # reset HPA scaling on every apply.
   selector:
     matchLabels:
       app: backend
@@ -25,27 +27,6 @@ spec:
         runAsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
-      initContainers:
-        # Applies pending Drizzle migrations before the new version starts.
-        - name: migrate
-          image: backend-migrate
-          imagePullPolicy: IfNotPresent
-          envFrom:
-            - configMapRef:
-                name: backend-config
-            - secretRef:
-                name: backend-secret
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
       containers:
         - name: backend
           image: backend

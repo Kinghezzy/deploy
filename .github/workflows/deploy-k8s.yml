@@ -173,7 +173,9 @@ jobs:
       - name: Apply manifests
         if: steps.config.outputs.ready == 'true'
         run: |
+          kubectl -n synapsvault delete job backend-migrate --ignore-not-found
           kubectl apply -k k8s/
+          kubectl -n synapsvault wait --for=condition=complete job/backend-migrate --timeout=180s
           kubectl -n synapsvault rollout status deployment/backend --timeout=300s
           kubectl -n synapsvault rollout status deployment/frontend --timeout=180s
 

@@ -9,6 +9,7 @@ namespace: synapsvault
 resources:
   - namespace.yaml
   - configmap.yaml
+  - backend-migrate-job.yaml
   - backend-deployment.yaml
   - backend-service.yaml
   - frontend-deployment.yaml

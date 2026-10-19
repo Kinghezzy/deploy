@@ -155,3 +155,33 @@ jobs:
           BACKUP_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_STORAGE_SECRET_ACCESS_KEY }}
           BACKUP_STORAGE_ENDPOINT: ${{ secrets.BACKUP_STORAGE_ENDPOINT }}
         run: bash scripts/restore.sh --verify-only
+
+  notify-failure:
+    name: Notify on Backup or Restore Failure
+    needs: [backup, verify-restore]
+    if: >-
+      always() && (
+        needs.backup.result == 'failure' ||
+        needs.verify-restore.result == 'failure'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send failure alert
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          BACKUP_RESULT: ${{ needs.backup.result }}
+          VERIFY_RESULT: ${{ needs.verify-restore.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          msg="SynapsVault Database Backup workflow failed (backup=${BACKUP_RESULT}, verify-restore=${VERIFY_RESULT}): ${RUN_URL}"
+          echo "::error::${msg}"
+          if [[ -n "${ALERT_WEBHOOK_URL}" ]]; then
+            payload="$(printf '{"text":"%s"}' "${msg}")"
+            curl -fsS -X POST -H 'Content-Type: application/json' --data "${payload}" "${ALERT_WEBHOOK_URL}"
+          else
+            echo "::warning::ALERT_WEBHOOK_URL secret is not set; failure logged to workflow summary only."
+          fi
+          echo "### :x: Backup / Restore Verification Failure" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Backup job**: \`${BACKUP_RESULT}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Verify-restore job**: \`${VERIFY_RESULT}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Run URL**: ${RUN_URL}" >> "$GITHUB_STEP_SUMMARY"
