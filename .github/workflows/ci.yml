@@ -17,6 +17,7 @@ concurrency:
 env:
   ACTIONLINT_VERSION: '1.7.7'
   KUBECONFORM_VERSION: '0.6.7'
+  KUBE_LINTER_VERSION: '0.7.1'
   PROMETHEUS_VERSION: '2.53.2'
   ALERTMANAGER_VERSION: '0.27.0'
   HADOLINT_VERSION: '2.12.0'
@@ -77,10 +78,16 @@ jobs:
         run: |
           curl -sSfL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
             | tar -xz -C /usr/local/bin kubeconform
+      - name: Install kube-linter
+        run: |
+          curl -sSfL "https://github.com/stackrox/kube-linter/releases/download/v${KUBE_LINTER_VERSION}/kube-linter-linux.tar.gz" \
+            | tar -xz -C /usr/local/bin kube-linter
       - name: Render kustomization
         run: kubectl kustomize k8s/ > rendered.yaml
       - name: Validate rendered manifests
         run: kubeconform -strict -summary rendered.yaml
+      - name: Lint rendered manifests (policy checks)
+        run: kube-linter lint rendered.yaml
       - name: Validate secret template
         run: kubeconform -strict -summary k8s/secrets.yaml
 
