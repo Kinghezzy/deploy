@@ -379,22 +379,51 @@ soroban_rpc_call() {
     "${SOROBAN_RPC_URL}"
 }
 
-# Fetch the latest ledger entry for a contract's instance.
+# Fetch the latest ledger entries for a contract's instance and persistent storage.
 fetch_contract_state() {
   local contract_id="$1"
   local out_file="$2"
 
-  local params
-  params="$(printf '{"contractId":"%s"}' "${contract_id}")"
+  local instance_params
+  instance_params="$(printf '{"contractId":"%s","durability":"persistent"}' "${contract_id}")"
 
-  local response
-  if ! response="$(soroban_rpc_call "getContractData" "${params}" 2>/dev/null)"; then
-    warn "Failed to fetch state for contract ${contract_id}"
+  local instance_response
+  if ! instance_response="$(soroban_rpc_call "getContractData" "${instance_params}" 2>/dev/null)"; then
+    warn "Failed to fetch instance state for contract ${contract_id}"
     printf '{"contractId":"%s","error":"rpc_call_failed"}\n' "${contract_id}" > "${out_file}"
     return 1
   fi
 
-  printf '%s\n' "${response}" > "${out_file}"
+  local persistent_entries="[]"
+  if [[ -n "${SOROBAN_CONTRACT_STORAGE_KEYS:-}" ]]; then
+    local -a entry_jsons=()
+    local key_xdr
+    IFS=',' read -r -a _keys <<< "${SOROBAN_CONTRACT_STORAGE_KEYS}"
+    for key_xdr in "${_keys[@]}"; do
+      key_xdr="$(printf '%s' "${key_xdr}" | tr -d '[:space:]')"
+      [[ -z "${key_xdr}" ]] && continue
+      local key_params key_resp
+      key_params="$(printf '{"contractId":"%s","key":"%s","durability":"persistent"}' "${contract_id}" "${key_xdr}")"
+      if key_resp="$(soroban_rpc_call "getContractData" "${key_params}" 2>/dev/null)"; then
+        entry_jsons+=("$(printf '{"key":"%s","result":%s}' "${key_xdr}" "${key_resp}")")
+      fi
+    done
+    if [[ ${#entry_jsons[@]} -gt 0 ]]; then
+      local joined=""
+      local item
+      for item in "${entry_jsons[@]}"; do
+        if [[ -n "${joined}" ]]; then
+          joined="${joined},${item}"
+        else
+          joined="${item}"
+        fi
+      done
+      persistent_entries="[${joined}]"
+    fi
+  fi
+
+  printf '{"contractId":"%s","instance":%s,"persistentStorage":%s}\n' \
+    "${contract_id}" "${instance_response}" "${persistent_entries}" > "${out_file}"
   return 0
 }
 
