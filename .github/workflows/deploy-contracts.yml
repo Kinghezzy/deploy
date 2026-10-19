@@ -56,8 +56,11 @@ jobs:
         run: npm ci
 
       - name: Install Rust + wasm32 target
+        # Pinned toolchain for reproducible builds. Prefer the contracts repo's
+        # rust-toolchain.toml when present; otherwise fall back to a fixed version.
         uses: dtolnay/rust-toolchain@1e68e9ce9a578ad21be5c273b9c981e2a9816f88 # stable
         with:
+          toolchain: ${{ hashFiles('contracts/rust-toolchain.toml') != '' && '1.81.0' || '1.81.0' }}
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo build
@@ -69,6 +72,21 @@ jobs:
         working-directory: contracts
         run: |
           cargo build --target wasm32-unknown-unknown --release --workspace
+          ls -lh target/wasm32-unknown-unknown/release/*.wasm
+
+      - name: Install Stellar CLI
+        run: |
+          curl -fsSL https://github.com/stellar/stellar-cli/raw/main/install.sh | bash -s -- --version 22.0.1
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Optimise WASM
+        working-directory: contracts
+        run: |
+          shopt -s nullglob
+          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+            echo "Optimising $wasm"
+            stellar contract optimize --wasm "$wasm"
+          done
           ls -lh target/wasm32-unknown-unknown/release/*.wasm
 
       - name: Deploy contracts
