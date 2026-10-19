@@ -9,6 +9,30 @@ on:
       - 'frontend/**'
       - 'k8s/**'
       - '.github/workflows/deploy-k8s.yml'
+  # Triggered by the backend/frontend repos when their code changes.
+  # Sender workflow (in SynapsVault/backend and SynapsVault/frontend):
+  #
+  #   name: Trigger deploy
+  #   on:
+  #     push:
+  #       branches: [main]
+  #   jobs:
+  #     dispatch:
+  #       runs-on: ubuntu-latest
+  #       steps:
+  #         - uses: peter-evans/repository-dispatch@v3
+  #           with:
+  #             token: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}  # PAT with repo scope on this repo
+  #             repository: SynapsVault/deploy
+  #             event-type: app-updated
+  #             client-payload: |
+  #               {"backend_ref": "${{ github.sha }}", "frontend_ref": "main"}
+  #
+  # The client_payload may include `backend_ref` and/or `frontend_ref` to
+  # build specific refs; omitted values fall back to `main`.
+  repository_dispatch:
+    types:
+      - app-updated
   workflow_dispatch:
     inputs:
       backend_ref:
@@ -51,14 +75,14 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: SynapsVault/backend
-          ref: ${{ inputs.backend_ref || 'main' }}
+          ref: ${{ inputs.backend_ref || github.event.client_payload.backend_ref || 'main' }}
           path: src/backend
 
       - name: Checkout frontend source
         uses: actions/checkout@v7
         with:
           repository: SynapsVault/frontend
-          ref: ${{ inputs.frontend_ref || 'main' }}
+          ref: ${{ inputs.frontend_ref || github.event.client_payload.frontend_ref || 'main' }}
           path: src/frontend
 
       - name: Compute image names

@@ -85,9 +85,52 @@ kustomize edit set image \
 
 ### Continuous deployment
 
-The [Deploy to Kubernetes](../.github/workflows/deploy-k8s.yml) workflow runs on pushes to `main` that touch `backend/`, `frontend/` or `k8s/` (or on manual dispatch, where you can choose the app repo refs). It builds and pushes all three images tagged with the commit SHA, pins those tags, applies the kustomization and waits for both rollouts.
+The [Deploy to Kubernetes](../.github/workflows/deploy-k8s.yml) workflow runs on pushes to `main` that touch `backend/`, `frontend/` or `k8s/`, on manual dispatch (where you can choose the app repo refs), and on `repository_dispatch` events sent by the app repos. It builds and pushes all three images tagged with the commit SHA, pins those tags, applies the kustomization and waits for both rollouts.
 
 It needs a base64-encoded kubeconfig in the `KUBECONFIG` secret of the `production` environment (`base64 -w0 < kubeconfig`). Until that secret exists, the deploy job is skipped with a warning; images are still built and pushed.
+
+#### Triggering a deploy from the app repos
+
+The backend and frontend repos can trigger a deploy when they change by sending a `repository_dispatch` event to this repo. The workflow listens for the `app-deploy` event type and reads the refs from the payload:
+
+| `client_payload` field | Default | Purpose |
+| --- | --- | --- |
+| `backend_ref` | `main` | Git ref (branch, tag or SHA) of `SynapsVault/backend` to build |
+| `frontend_ref` | `main` | Git ref (branch, tag or SHA) of `SynapsVault/frontend` to build |
+
+Add a workflow like this to each app repo (`.github/workflows/deploy.yml`). It needs a token with `contents: write` on this repo stored as the `DEPLOY_DISPATCH_TOKEN` secret:
+
+```yaml
+name: Trigger deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch deploy-k8s
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+          repository: SynapsVault/deploy
+          event-type: app-deploy
+          client-payload: |
+            {
+              "backend_ref": "${{ github.sha }}",
+              "frontend_ref": "${{ github.sha }}"
+            }
+```
+
+Set only the ref for the repo that changed (e.g. the backend repo sends `backend_ref` and leaves `frontend_ref` at its default). You can also dispatch manually with the GitHub CLI:
+
+```sh
+gh api repos/SynapsVault/deploy/dispatches \
+  -f event_type=app-deploy \
+  -f 'client_payload[backend_ref]=<sha>'
+```
 
 ## 3. Verify the rollout
 
@@ -198,8 +241,9 @@ Look at the `Liveness`/`Readiness` sections and the `Events` at the bottom for p
 
 ## Troubleshooting
 
-- **Pods stuck in `Pending`** — check node capacity and scheduling events: `kubectl describe pod <pod> -n synapsvault`.
-- **Pods in `CrashLoopBackOff`** — check logs: `kubectl logs <pod> -n synapsvault --previous`.
-- **Ingress has no address** — confirm an ingress controller is installed and running.
-- **TLS certificate not issued** — check cert-manager: `kubectl describe certificate -n synapsvault` and `kubectl describe certificaterequest -n synapsvault`.
-- **HPA shows `<unknown>` targets** — metrics-server is missing or not ready.
+- **Pods stuck in `Pending`** — check node capacity and scheduling constraints with `kubectl describe pod <pod> -n synapsvault`; look for insufficient CPU/memory or unsatisfied node selectors/taints.
+- **Pods in `ImagePullBackOff`/`ErrImagePull`** — confirm the image tag exists in `ghcr.io/synapsvault/deploy/*` and that the cluster can pull from GHCR (image pull secret if the packages are private).
+- **`CrashLoopBackOff`** — inspect `kubectl logs <pod> -n synapsvault --previous` and the initContainer logs (the `migrate` container runs first).
+- **Ingress returns 404/502** — verify the ingress controller is running, the `Ingress` host matches your DNS, and the backend/frontend Services have ready endpoints (`kubectl get endpoints -n synapsvault`).
+- **TLS certificate not issued** — check the `Certificate`/`Order`/`Challenge` resources and cert-manager logs; ensure the `ClusterIssuer` is valid and DNS points at the ingress.
+- **HPA shows `<unknown>` targets** — metrics-server is missing or not ready; install it and re-check with `kubectl top pods -n synapsvault`.
