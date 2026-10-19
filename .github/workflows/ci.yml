@@ -19,6 +19,7 @@ env:
   KUBECONFORM_VERSION: '0.6.7'
   PROMETHEUS_VERSION: '2.53.2'
   ALERTMANAGER_VERSION: '0.27.0'
+  HADOLINT_VERSION: '2.12.0'
 
 jobs:
   workflows:
@@ -117,6 +118,21 @@ jobs:
         run: |
           cp .env.example .env
           docker compose config --quiet
+
+  hadolint:
+    name: Lint Dockerfiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install hadolint
+        run: |
+          curl -sSfL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
+            -o /usr/local/bin/hadolint
+          chmod +x /usr/local/bin/hadolint
+      - name: Run hadolint
+        run: |
+          hadolint --version
+          hadolint backend/Dockerfile frontend/Dockerfile
 
   docker:
     name: Build images
